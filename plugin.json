@@ -227,6 +227,20 @@
         }
       },
       {
+        "name": "canvas.select",
+        "title": {
+          "en": "Select node",
+          "ko": "노드 선택"
+        }
+      },
+      {
+        "name": "canvas.set",
+        "title": {
+          "en": "Set canvas framing",
+          "ko": "캔버스 프레이밍 설정"
+        }
+      },
+      {
         "name": "export.tsx",
         "title": {
           "en": "Export TSX",

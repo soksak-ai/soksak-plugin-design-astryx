@@ -35,6 +35,15 @@ Astryx 의 원래 단위는 **TSX 프로그램**이다 — 619 shipped 템플릿
 
 `export.tsx` 는 두 종류 어느 쪽에서든 작동 코드를 넘긴다(§10).
 
+### React 전제(법)
+
+이 플러그인은 **React 19 를 전제**한다 — Astryx 의 기반. 우발적 의존이 아니다: Astryx 컴포넌트는 React 컴포넌트이고, 렌더 코어는 React 트리를 마운트하며, 캔버스 뷰는 `createRoot` 를 돈다. `-astryx` 엔진 접미사가 이 전제를 **선언**한다(하드 바인딩하는 엔진 이름을 단 플러그인, 명명 법). 확정된 귀결:
+
+- 내보내기는 React TSX(`export.tsx`, §10) — 유일한 내보내기 shape.
+- 캔버스 뷰와 그 chrome 은 React(§7 Dogfood 법).
+- 코어는 프레임워크 불가지 유지: `app.ui.registerView` 로 뷰를 호스팅(DOM 컨테이너 + Shadow-DOM React 섬)할 뿐, 자기 React 의존을 두지 않는다.
+- 다른 프레임워크(Vue·Svelte·순수 HTML)용 디자인 엔진은 **형제 플러그인**(`soksak-plugin-design-<engine>`)이지 이 플러그인의 한 모드가 아니다. 이 플러그인은 프레임워크를 추상화하지 않고 하나에 헌신한다.
+
 ---
 
 ## 2. 페이지·트리 모델
@@ -111,6 +120,8 @@ ColorMode  = "light" | "dark" | "system"
 - `COMPILE_FAILED` — `page.code.set` 이 렌더 코어 sucrase 설정(§7)에서 컴파일 안 되는 TSX 를 받았다. 실패 봉투가 컴파일러 오류를 `data.diagnostics` 에 싣는다(§4).
 - `PREVIEW_FAILED` — v3 의미: 캔버스 뷰 열기/포커스 실패(`plugin.view.open` 비-ok, 예: 활성 프로젝트 없음). v2 의미(아티팩트 쓰기·브라우저 구동)는 사라졌다.
 
+두 뷰-세션 명령(§5)은 새 코드를 **추가하지 않는다**. `canvas.select` 는 노드 존재를 검증하고 `NOT_FOUND`(미지 `pageId`/`nodeId`)를 반환한다. `canvas.set` 은 `viewport` 를 enum 검증하고 잘못된 값에 `INVALID_PROP` 를 반환하며 허용 집합을 `data.validValues` 에 싣는다(실패-`data` 채널의 두 번째 사용자, §4).
+
 **v3 제거:** `DEP_MISSING` — 브라우저 의존 탐지가 더는 없다(캔버스는 앱 내). 참조 코드는 삭제, git 이 기억한다(§7 Legacy-removal law).
 
 `PERMISSION_DENIED`·`UNKNOWN_COMMAND`·`INVALID_PARAMS`·`INTERNAL` 은 코어 소유 결과(`registry.execute` 가 생산)이지 핸들러가 만들지 않는다.
@@ -123,7 +134,7 @@ ColorMode  = "light" | "dark" | "system"
 
 - **성공** — 핸들러는 평범한 데이터 레코드(`data`)를 반환한다. 표시 `message` 는 `register(...).message = (data) => <한국어 한 줄>` 이 소유한다. 성공 시 핸들러가 넣은 `message` 는 버려지므로 한국어 한 줄은 `spec.message` 에만 산다(단일 소유).
 - **실패** — 핸들러는 `src/types.ts` 의 `err(code, message)` = `{ ok:false, code, message }` 를 반환하고 그대로 보존된다. `{ ok:false, error }` 레거시 방언은 금지.
-- **진단 포함 실패** — `err(code, message, data)` 는 실패 봉투에 선택적 구조 `data` 를 더한다. 대칭 봉투 `{ ok, code, message, data }` 를 따른다. v2 유일 사용자는 `page.code.set` 의 `COMPILE_FAILED` 로 `data.diagnostics` 가 sucrase 컴파일러 오류를 싣는다. 사람용 요약은 `message` 에도 담아, 코어가 실패 `data` 를 흘려도 오류가 사라지지 않게 한다.
+- **진단 포함 실패** — `err(code, message, data)` 는 실패 봉투에 선택적 구조 `data` 를 더한다. 대칭 봉투 `{ ok, code, message, data }` 를 따른다. 두 사용자: `page.code.set` 의 `COMPILE_FAILED`(`data.diagnostics` = sucrase 컴파일러 오류)와 `canvas.set` 의 `INVALID_PROP`(`data.validValues` = 허용 `viewport` 집합, §5). 사람용 요약은 `message` 에도 담아, 코어가 실패 `data` 를 흘려도 오류가 사라지지 않게 한다.
 
 모든 `register(...)` 호출은 `message` 를 반드시 제공한다. `message` 누락은 답을 라벨로 열화시키고 `plugin.conformance` 가 그 명령을 `messagesMissing` 으로 보고한다. 모든 명령 message 는 명령이 소유하는 한국어 산문이다.
 
@@ -131,7 +142,7 @@ ColorMode  = "light" | "dark" | "system"
 
 ---
 
-## 5. 명령 표면(26)
+## 5. 명령 표면(28)
 
 모든 명령은 단일 JSON params 객체를 받고 §4 대로 반환한다. `pageId`/`nodeId` 는 §2 의 id 다. 아래에서 "→" 는 성공 데이터 레코드, "errs" 는 핸들러가 반환할 수 있는 §3 부분집합이다.
 
@@ -307,6 +318,20 @@ ColorMode  = "light" | "dark" | "system"
 - errs: `NOT_FOUND`(준 `pageId` 부재)
 - message: `캔버스 재렌더(페이지 {pageId}).`
 
+### canvas.select
+- params: `{ pageId?: string, nodeId: string | null }`(`pageId` 기본 = 활성 캔버스 페이지)
+- 동작: 선택(§7 Selection law)을 스토어 뷰-세션의 `{ pageId, nodeId }` 로 설정한다 — 트리 노드 클릭·캔버스 클릭이 쓰는 그 **같은** 필드라 셋이 수렴한다. `nodeId: null` 은 노드 선택 해제(페이지만). null 아닌 `nodeId` 는 `pageId` 위 존재하는 노드(트리 페이지 노드 id, §2)를 가리켜야 함 — 아니면 `NOT_FOUND`. 성공 message 는 선택 노드의 **type + id**(또는 해제 상태)를 말한다. tsx 페이지는 노드 id 가 없으니 null 아닌 `nodeId` 는 `NOT_FOUND`. 헤드리스 완결: 뷰가 없어도 선택이 스토어에 남아 다음 마운트가 하이라이트한다. 순수 세션 변이 — `onChange` 발화로 마운트된 뷰가 재하이라이트.
+- → `{ pageId, nodeId, type }`(해제 시 `nodeId`/`type` `null`)
+- errs: `NOT_FOUND`(페이지 부재, 또는 `nodeId` 가 페이지 위 노드 아님)
+- message: `{type} 노드({nodeId}) 선택.`(해제 시 `페이지 {pageId} 선택(노드 해제).`)
+
+### canvas.set
+- params: `{ viewport?: "fill" | 1280 | 768 | 375, background?: string }`(최소 하나. `background` = CSS 색 문자열, 또는 `"neutral"` 기본)
+- 동작: 캔버스 프레이밍 컨트롤(§7 툴바 법, `CanvasControls`)을 스토어 뷰-세션에서 변이한다 — 툴바의 뷰포트/배경 컨트롤이 쓰는 그 **같은** 필드. `viewport` 를 `fill|1280|768|375` 로 enum 검증하고, 잘못된 값은 허용 집합을 `data.validValues` 에 실어 `INVALID_PROP` 반환(§3·§4). `background: "neutral"`(또는 `""`)은 중립 기본으로 리셋, 그 외 문자열은 raw CSS 색으로 취급(미검증 — CSS 는 미지 색 문자열을 무시하니 정직한 no-op 이지 크래시 아님). 헤드리스 완결: 뷰가 없어도 프레이밍이 스토어에 남아 다음 마운트가 이 프레임으로 연다. 순수 세션 변이 — `onChange` 발화로 마운트된 뷰가 재프레이밍.
+- → `{ viewport, background }`(호출 후 프레이밍)
+- errs: `INVALID_PROP`(잘못된 `viewport` enum — `data.validValues` 동반), `INVALID_ARG`(`viewport`·`background` 둘 다 없음)
+- message: `캔버스 프레이밍 갱신(뷰포트 {viewport}).`
+
 ### export.tsx
 - params: `{ pageId: string }`
 - 동작: 페이지를 컴파일 가능한 TSX 파일로 낸다(§10). **tsx 페이지**는 `code` 를 verbatim 반환. **tree 페이지**는 기존 직렬화기로 트리를 직렬화.
@@ -369,13 +394,79 @@ vitest 테스트가 `Object.keys(catalog.json)` 과 `core` `package.json` 에서
 
 뷰와 명령은 **같은 모듈 스토어**를 공유한다(erd 패턴 — `plugin-entry` 명령 등록과 뷰가 한 `createStore` 인스턴스를 import). 뷰는 스토어 `onChange` 훅(`createStore` `opts.onChange`)을 구독한다. 모든 변이 명령(`comp.*`·`page.*`·`theme.set`·`template.apply`·`page.code.set`)이 persist 후 `onChange` 를 발화하고 뷰가 **활성 페이지**(`store.preview.activePageId`, §11)를 재렌더한다. 파일 발행도, 이동도 없다 — React 트리가 제자리 갱신. `preview.open` 은 활성 페이지를 세팅+`onChange`, `preview.refresh` 는 `onChange` 를 명시 발화. 멀티윈도우 정합은 기존 `app.data.kv.watch` → `rehydrate` → `onChange` 경로가 진다(§11).
 
+### Chrome 법(dogfood, 3-pane 프레임)
+
+툴 chrome 은 **Astryx 컴포넌트로 짓는다** — 플러그인이 자기가 실어 나르는 엔진을 dogfood 한다(오너 재가). 프레임은 오너의 확정 레이아웃이다: 상단 툴바 + 3-pane 바디.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ 툴바  [페이지▾][테마▾][mode][뷰포트 fill·1280·768·375][배경▾][TSX 내보내기] │
+├────────────┬──────────────────────────────┬──────────────────────┤
+│ 구조(트리)  │ 캔버스 — Shadow-DOM 실물 렌더   │ 인스펙터              │
+│ TreeList   │ (§7 Live law; 캔버스 클릭=선택,  │ (선택 노드 prop 폼)   │
+│ 노드클릭↔선택│  선택 하이라이트)               │                     │
+└────────────┴──────────────────────────────┴──────────────────────┘
+```
+
+- **프레임** — Astryx `Layout` + `LayoutPanel` + `LayoutContent`, frame-first 독트린(`docs.get layout`)대로. 사이드 패널은 px 예산: 구조 ≈ 240–280px, 인스펙터 ≈ 300–340px; 캔버스가 남은 `LayoutContent` 를 차지.
+- **구조 패널** — Astryx `TreeList`, 활성 페이지 트리(tree 페이지)를 아웃라인으로 투영. tsx 페이지는 읽기전용 안내(§ 인스펙터 법).
+- **인스펙터 패널** — Astryx `Field` / `TextInput` / `Selector` / `Switch` 폼(§ 인스펙터 법).
+- **툴바** — Astryx `Toolbar`(§ 툴바 법).
+
+**중첩 테마 분리(두 supply, `documentElement` 스탬프 없음).** chrome 은 캔버스와 **같은 shadow 루트 안에** 렌더하되 **자기 중립 `ThemeContext`** 를 공급한다 — chrome 은 문서 테마와 무관히 `neutral` 에 살고, 캔버스 서브트리는 **문서** 테마(`activeTheme`/`mode`)를 유지한다. 이는 기존 캔버스-루트 패턴(§ 마운트 법 4단계)의 확장이다: 각 `<Theme>`/`ThemeContext` supply 는 중첩이라 어느 것도 `document.documentElement` 를 스탬프하지 않는다. 문서 테마는 캔버스 렌더만 구동하고, `theme.set` 이 돌아도 chrome 은 다시 칠해지지 않는다.
+
 ### 툴바 법
 
-뷰 chrome 은 렌더 영역 위 툴바로 세 컨트롤 그룹이고 **전부 명령 클라이언트**다(레지스트리를 호출하므로 헤드리스와 UI 가 한 진실 — 툴바는 스토어를 직접 변이하지 않는다):
+툴바(Astryx `Toolbar`)는 캔버스 pane 위에 있고 다음 컨트롤을 갖는다. **전부 명령 클라이언트**다(CLI/MCP 가 쓰는 그 **같은** 인프로세스 `execute` 로 레지스트리를 호출하므로 헤드리스와 UI 가 한 진실 — 툴바는 스토어를 직접 변이하지 않는다):
 
 - **페이지 선택기** — 문서 페이지(tree+tsx)를 나열·활성 페이지 선택(`preview.open`/`preview.refresh` 의미, 즉 `activePageId` 세팅).
 - **테마(7) + 모드(light/dark/system) 선택기** — `theme.set`(CLI/MCP 와 같은 명령)을 구동. 라이브 재렌더가 호스트 `data-astryx-theme`/`color-scheme` 을 스왑(§9).
-- **캔버스 컨트롤** — 뷰포트 폭 프리셋(`fill` / `1280` / `768` / `375`)과 캔버스 배경. **뷰 로컬** 프레이밍(`CanvasControls`, `src/types.ts`): 문서의 일부가 아니고 영속 안 하며 창마다 독립 — 렌더를 프레이밍하지 렌더 결과가 아니다. 경계는 명시적이다: 문서 상태(페이지/테마/모드)는 스토어, 프레이밍 상태는 뷰 인스턴스.
+- **뷰포트 + 배경 컨트롤** — 뷰포트 폭 프리셋(`fill` / `1280` / `768` / `375`)과 캔버스 배경, **`canvas.set`**(§5) 구동. 렌더를 프레이밍한다(`CanvasControls`, `src/types.ts`): 문서의 일부가 아니고 `app.data.kv` 에 영속 안 하나, 뷰가 아니라 **스토어 뷰-세션**에 살아 `canvas.set` 이 헤드리스로 구동할 수 있다(§11). 경계는 명시적이다: 문서 상태(페이지/테마/모드)는 문서에 영속, 프레이밍 상태는 스토어-세션·비영속.
+- **TSX 내보내기 버튼** — 활성 페이지에 **`export.tsx`** 를 호출해 결과를 제시하는 `TSX 내보내기` 버튼(§ 내보내기 제시 법).
+
+### 내보내기 제시 법(핀)
+
+`TSX 내보내기` 버튼은 `export.tsx` 를 호출해 반환된 `tsx` 를 **shadow 루트 안 선택 가능한 코드 오버레이**로 제시한다 — 사용자가 전체 선택·복사할 수 있는 스크롤 가능 `<pre>`/`<textarea>`. 이 플러그인은 `clipboard:read`/`clipboard:write` 권한을 **선언하지 않으므로**(§8) 코어 `ctx.app.clipboard` 표면은 **부재**다(`src/plugins/api.ts` 에서 clipboard 권한 하에서만 나타난다). 따라서 원클릭 복사는 권한 집합을 늘리지 않는 한 v3 에서 **미제공**이다. 핀된 제시는 새 권한이 필요 없는 in-shadow 선택 오버레이다. (향후 개정이 `clipboard:write` 를 더하면 오버레이가 복사 버튼을 더할 MAY. 그때까지 권한 집합은 §8 유지.)
+
+### Selection 법
+
+선택은 문서 개념이 아니라 세션 개념이다. shape 은 `{ pageId, nodeId | null }`(`src/types.ts` `Selection`), 스토어 **뷰-세션**에 쥔다(문서에 영속 안 함, `app.data.kv` 에 안 씀, §11).
+
+- **세 수렴 writer.** 선택은 (1) `canvas.select` 명령, (2) 구조 패널 **트리 노드 클릭**, (3) 렌더된 노드 **캔버스 클릭** 이 설정한다. 셋이 **같은** 스토어 필드에 쓴다 — 선택은 셋이 아니라 하나다.
+- **뷰 바인딩.** 뷰는 선택 노드를 트리(구조 패널)와 캔버스(렌더 요소의 선택 아웃라인) **양쪽**에 하이라이트하고, 인스펙터(§ 인스펙터 법)가 폼을 선택 노드에 바인딩한다.
+- **재렌더 생존.** 페이지를 재렌더하는 변이도 선택을 유지한다(`nodeId` 는 안정, §2 id 법). 선택 노드가 사라지면(`comp.remove` 삭제, 또는 활성 페이지가 그 id 없는 페이지로 전환) 선택은 **해제**(nodeId → null)되어 인스펙터가 죽은 노드에 바인딩되지 않는다.
+- **헤드리스.** `canvas.select` 는 뷰 없이 스토어 필드를 변이하고, 선택은 다음 마운트까지 남아 마운트가 하이라이트한다(§5).
+
+### 인스펙터 법
+
+인스펙터 패널은 선택 노드 `type` 의 **카탈로그 엔트리**(`catalog.doc`, §6)에서 **생성한** prop 폼을 렌더한다. 컴포넌트마다 손으로 쓴 폼이 없다 — 폼이 파생이라 99 컴포넌트를 균일히 덮는다. 카탈로그 prop `type` 별 컨트롤 매핑:
+
+- 카탈로그 `enum` 존재 → enum 멤버 위 Astryx **`Selector`**.
+- 카탈로그 `type` `"boolean"` → Astryx **`Switch`**.
+- 카탈로그 `type` `"number"`, 또는 spacing prop(`0–12` 간격 스케일) → **`TextInput`**(숫자), 또는 경계 `0–12` spacing 은 **`Slider`**.
+- 카탈로그 `type` `"string"` → **`TextInput`**.
+- 보편 `style` / `className` prop(보편 prop 법, §6) → **raw 텍스트 `TextInput`**.
+- 카탈로그 `type` 이 콜백(`"=>"`)·`ReactNode`, 혹은 JSON 표현 불가인 prop → **읽기전용 노트**(편집 불가; §2 는 트리 경로에서 콜백/컴포넌트 prop 을 금지).
+
+모든 편집은 툴바가 쓰는 그 **같은** 인프로세스 `execute` 로 **`comp.set` 을 디스패치**한다 — 한 진실, 직접 스토어 변이 없음. 검증은 명령의 몫(§2 prop 검증 법)이고, `INVALID_PROP` 결과는 인라인 노출·스토어 불변.
+
+**tsx 페이지**는 인스펙터가 `page.code.get` / `page.code.set` 로 안내하는 **읽기전용 안내**를 보인다(tsx 페이지는 검사할 노드가 없음, §2). 구조 패널도 tsx 안내를 보이고, 트리 연산 종류 게이트(§2)가 이미 `comp.*` 를 막는다.
+
+### 전-요소-명령 조항(오너 법)
+
+뷰의 모든 상호작용 요소는 **레지스트리 명령에 1:1 매핑**된다 — 뷰는 명령 **클라이언트**이지 사설 상태기계가 아니다:
+
+| 뷰 요소 | 명령 |
+|---------|------|
+| 페이지 선택기 | `preview.open` / `preview.refresh`(`activePageId` 세팅) |
+| 테마 / 모드 선택기 | `theme.set` |
+| 뷰포트 / 배경 컨트롤 | `canvas.set` |
+| TSX 내보내기 버튼 | `export.tsx` |
+| 트리 노드 클릭 / 캔버스 클릭 / 선택 아웃라인 | `canvas.select` |
+| 인스펙터 필드 편집 | `comp.set` |
+| 구조 패널 추가 / 삭제 / 이동(tree 페이지) | `comp.add` / `comp.remove` / `comp.move` |
+
+어떤 뷰 컨트롤도 스토어를 직접 변이하지 않고 각기 `execute` 로 라우팅한다. 그래서 LLM 이 전 표면을 헤드리스로 구동할 수 있고("저 버튼 선택해" → `canvas.select`; "375 폭 보여줘" → `canvas.set`), UI 와 CLI/MCP 가 결코 어긋날 수 없다.
 
 ### 렌더 코어 법(엔진 재사용)
 
@@ -511,7 +602,13 @@ shadow 는 **7 전부**의 테마 `dist/theme.css` 블록을 임베드한다(§7
 - 매 변경 시: `app.data.kv.set(key, doc)` 로 되쓴다.
 - `app.data.kv.watch` 로 같은 프로젝트의 여러 창을 일관 유지(외부 변경 시 재하이드레이트).
 
-명령은 헤드리스 완결이다: 뷰가 필요 없다. **활성 캔버스 페이지**(`preview.activePageId` — 마운트된 뷰가 렌더하는 페이지, §7 Live law)가 유일 세션 필드이고 영속하지 않는다. v2 세션 필드 `engine`/`url`/`server` 는 제거된다(브라우저 엔진·아티팩트 url·http 서버가 없다). `CanvasControls`(뷰포트 폭·배경)는 뷰 로컬이라 저장 안 한다(§7 툴바 법).
+명령은 헤드리스 완결이다: 뷰가 필요 없다. 스토어는 영속 문서 곁에 **뷰-세션**을 쥔다 — 세 필드, `app.data.kv` 에 **아무것도 영속 안 함**(`DesignDoc` 만 영속):
+
+- **활성 캔버스 페이지**(`preview.activePageId` — 마운트된 뷰가 렌더하는 페이지, §7 Live law).
+- **선택**(`Selection` = `{ pageId, nodeId | null }`, §7 Selection law) — `canvas.select`·트리 클릭·캔버스 클릭이 설정. 선택 노드가 사라지면 해제.
+- **캔버스 프레이밍**(`CanvasControls` = 뷰포트 폭 + 배경, §7 툴바 법) — `canvas.set` 이 설정.
+
+이들은 문서가 아니라 세션이다: 명령으로 변이하고(LLM 이 헤드리스로 구동) 스토어 수명 내 마운트를 넘어 생존하나, kv 문서엔 들어가지 않는다. v2 세션 필드 `engine`/`url`/`server` 는 제거된다(브라우저 엔진·아티팩트 url·http 서버가 없다).
 
 ---
 

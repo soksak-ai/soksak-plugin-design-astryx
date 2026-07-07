@@ -35,6 +35,15 @@ The two kinds are complementary, not ranked:
 
 `export.tsx` hands off working code from either kind (§10).
 
+### React premise (law)
+
+The plugin **presupposes React 19** — Astryx's substrate. This is not an incidental dependency: Astryx components are React components, the render core mounts React trees, and the canvas view runs `createRoot`. The `-astryx` engine suffix **declares** this premise (a plugin named for the engine it hard-binds, per the naming law). Consequences, fixed:
+
+- Exports are React TSX (`export.tsx`, §10) — the only export shape.
+- The canvas view and its chrome are React (§7 Dogfood law).
+- Core stays framework-agnostic: it hosts the view via `app.ui.registerView` (a DOM container + a Shadow-DOM React island), never a React dependency of its own.
+- A design engine for another framework (Vue, Svelte, plain HTML) is a **sibling plugin** (`soksak-plugin-design-<engine>`), never a mode of this one. This plugin does not abstract over frameworks; it commits to one.
+
 ---
 
 ## 2. Page and tree model
@@ -111,6 +120,8 @@ The command layer produces exactly these codes (`src/types.ts` `Code`):
 - `COMPILE_FAILED` — `page.code.set` was given TSX that does not compile under the render core's sucrase config (§7). The failure envelope carries the compiler error in `data.diagnostics` (§4).
 - `PREVIEW_FAILED` — v3 meaning: opening/focusing the canvas view failed (`plugin.view.open` returned non-ok, e.g. no active project). The v2 meaning (artifact write / browser drive) is gone.
 
+The two view-session commands (§5) add **no** new codes. `canvas.select` validates node existence and returns `NOT_FOUND` (unknown `pageId`/`nodeId`). `canvas.set` enum-validates `viewport` and returns `INVALID_PROP` on a bad value, carrying the accepted set in `data.validValues` (a second user of the failure-`data` channel, §4).
+
 **Removed in v3:** `DEP_MISSING` — there is no browser-dependency probe anymore (the canvas is in-app). Any code referencing it is deleted; git remembers (§7 Legacy-removal law).
 
 `PERMISSION_DENIED`, `UNKNOWN_COMMAND`, `INVALID_PARAMS`, `INTERNAL` are core-owned outcomes (produced by `registry.execute`, not by handlers). Handlers never emit them.
@@ -123,7 +134,7 @@ The wire outcome is always the symmetric envelope `{ ok, code, message, data? }`
 
 - **Success** — the handler returns a plain data record (the `data`). The displayed `message` is owned by `register(...).message = (data) => <Korean one-line>`. A handler's own `message` on success is discarded, so the Korean line lives in `spec.message` only (single source).
 - **Failure** — the handler returns `err(code, message)` from `src/types.ts` = `{ ok:false, code, message }`, honored verbatim. The `{ ok:false, error }` legacy dialect is forbidden.
-- **Failure with diagnostics** — `err(code, message, data)` adds an optional structured `data` to the failure envelope, honoring the symmetric envelope `{ ok, code, message, data }`. The sole v2 user is `page.code.set`'s `COMPILE_FAILED`, whose `data.diagnostics` carries the sucrase compiler error. The human-readable summary is ALSO placed in `message`, so a caller still sees the error even if the core drops failure `data`.
+- **Failure with diagnostics** — `err(code, message, data)` adds an optional structured `data` to the failure envelope, honoring the symmetric envelope `{ ok, code, message, data }`. Two users: `page.code.set`'s `COMPILE_FAILED`, whose `data.diagnostics` carries the sucrase compiler error; and `canvas.set`'s `INVALID_PROP`, whose `data.validValues` carries the accepted `viewport` set (§5). The human-readable summary is ALSO placed in `message`, so a caller still sees the error even if the core drops failure `data`.
 
 Every `register(...)` call MUST provide `message`; a missing `message` degrades the answer to a label and `plugin.conformance` reports the command as `messagesMissing`. Every command message is command-owned Korean prose.
 
@@ -131,7 +142,7 @@ Command descriptions follow the two-axis i18n rule (`docs/I18N.md`): `spec.descr
 
 ---
 
-## 5. Command surface (26)
+## 5. Command surface (28)
 
 All commands take a single JSON params object and return per §4. `pageId`/`nodeId` are the ids from §2. Below, "→" is the success data record; "errs" is the subset of §3 the handler may return.
 
@@ -307,6 +318,20 @@ Ordering note: `page.create` sets the source once (tree root or starter tsx); `c
 - errs: `NOT_FOUND` (given `pageId` absent)
 - message: `캔버스 재렌더(페이지 {pageId}).`
 
+### canvas.select
+- params: `{ pageId?: string, nodeId: string | null }` (`pageId` default = the active canvas page)
+- Behavior: sets the selection (§7 Selection law) to `{ pageId, nodeId }` in the store's view-session — the SAME field the tree-node click and the canvas click write, so all three converge. `nodeId: null` clears the node selection (page-only). A non-null `nodeId` must name an existing node on `pageId` (a tree-page node id, §2) — else `NOT_FOUND`. On success the success `message` states the selected node's **type + id** (or the cleared state). A tsx page has no node ids, so a non-null `nodeId` on a tsx page returns `NOT_FOUND`. Headless-complete: with no view mounted the selection still lands in the store and persists for the next mount (the view highlights it on mount). Purely a session mutation — fires `onChange` so a mounted view re-highlights.
+- → `{ pageId, nodeId, type }` (`nodeId`/`type` `null` when cleared)
+- errs: `NOT_FOUND` (page absent, or `nodeId` names no node on the page)
+- message: `{type} 노드({nodeId}) 선택.` (or `페이지 {pageId} 선택(노드 해제).` when cleared)
+
+### canvas.set
+- params: `{ viewport?: "fill" | 1280 | 768 | 375, background?: string }` (at least one; `background` = a CSS color string, or `"neutral"` for the default)
+- Behavior: mutates the canvas framing controls (§7 Toolbar law, `CanvasControls`) in the store's view-session — the SAME field the toolbar's viewport/background controls write. Enum-validates `viewport` against `fill|1280|768|375`; a bad value returns `INVALID_PROP` with the accepted set in `data.validValues` (§3, §4). `background: "neutral"` (or `""`) resets to the neutral default; any other string is taken as a raw CSS color (unvalidated — CSS tolerates unknown color strings by ignoring them, an honest no-op, not a crash). Headless-complete: with no view mounted the framing still lands in the store and persists for the next mount. Purely a session mutation — fires `onChange` so a mounted view re-frames.
+- → `{ viewport, background }` (the framing after the call)
+- errs: `INVALID_PROP` (bad `viewport` enum — `data.validValues` carries the accepted set), `INVALID_ARG` (neither `viewport` nor `background` given)
+- message: `캔버스 프레이밍 갱신(뷰포트 {viewport}).`
+
 ### export.tsx
 - params: `{ pageId: string }`
 - Behavior: emits the page as a compilable TSX file (§10). A **tsx page** returns its `code` verbatim. A **tree page** serializes the tree with the existing serializer.
@@ -369,13 +394,80 @@ The primary design surface is a **plugin view** (`contributes.views` id `canvas`
 
 The view and the commands share the **same module store** (the erd pattern — one `createStore` instance imported by both `plugin-entry` command registration and the view). The view subscribes to the store's `onChange` hook (`createStore` `opts.onChange`); every mutating command (`comp.*`, `page.*`, `theme.set`, `template.apply`, `page.code.set`) fires `onChange` after it persists, and the view re-renders the **active page** (`store.preview.activePageId`, §11). No file emission, no navigation — the React tree updates in place. `preview.open` sets the active page and fires `onChange`; `preview.refresh` fires `onChange` explicitly. Multi-window consistency rides the existing `app.data.kv.watch` → `rehydrate` → `onChange` path (§11).
 
+### Chrome law (dogfood, 3-pane frame)
+
+The tool chrome is **built from Astryx components** — the plugin dogfoods the engine it ships (owner-ratified). The frame is the owner's confirmed layout: a top toolbar over a three-pane body.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ Toolbar  [page▾][theme▾][mode][viewport fill·1280·768·375][bg▾][TSX export] │
+├────────────┬──────────────────────────────┬──────────────────────┤
+│ Structure  │ Canvas — Shadow-DOM live render │ Inspector           │
+│ (TreeList) │ (§7 Live law; canvas click =    │ (selected node's    │
+│ node click │  select; selection highlighted) │  prop form)         │
+│ ↔ selection│                                 │                     │
+└────────────┴──────────────────────────────┴──────────────────────┘
+```
+
+- **Frame** — Astryx `Layout` + `LayoutPanel` + `LayoutContent` per the frame-first doctrine (`docs.get layout`). Side panels carry pixel budgets: structure ≈ 240–280px, inspector ≈ 300–340px; the canvas takes the remaining `LayoutContent`.
+- **Structure panel** — Astryx `TreeList`, projecting the active page's tree (tree pages) as an outline; a tsx page shows a read-only notice (§ Inspector law).
+- **Inspector panel** — Astryx `Field` / `TextInput` / `Selector` / `Switch` forms (§ Inspector law).
+- **Toolbar** — Astryx `Toolbar` (§ Toolbar law).
+
+**Nested-theme separation (two supplies, no `documentElement` stamping).** The chrome renders **inside the same shadow root** as the canvas but supplies **its own neutral `ThemeContext`** — the chrome lives in `neutral` regardless of the document theme, while the canvas subtree keeps the **document** theme (`activeTheme`/`mode`). This extends the existing canvas-root pattern (§ Mount law step 4): each `<Theme>`/`ThemeContext` supply is nested, so neither stamps `document.documentElement`. The document theme drives the canvas render only; the chrome does not repaint when `theme.set` runs.
+
 ### Toolbar law
 
-The view chrome is a toolbar above the rendering area with three control groups, **all of which are command clients** (they call the registry, so headless and UI stay one truth — the toolbar never mutates the store directly):
+The toolbar (Astryx `Toolbar`) sits above the canvas pane with these controls, **all of which are command clients** (they call the registry via the SAME in-process `execute` the CLI/MCP use, so headless and UI stay one truth — the toolbar never mutates the store directly):
 
 - **Page selector** — lists the doc's pages (tree + tsx) and selects the active page (drives `preview.open`/`preview.refresh` semantics, i.e. sets `activePageId`).
 - **Theme (7) + mode (light/dark/system) selectors** — drive `theme.set` (the same command CLI/MCP use). The live re-render swaps the host `data-astryx-theme`/`color-scheme` (§9).
-- **Canvas controls** — viewport-width presets (`fill` / `1280` / `768` / `375`) and canvas background. These are **view-local** framing (`CanvasControls`, `src/types.ts`): they are NOT part of the document, NOT persisted, and per-window — they frame the render, they are not a render result. The boundary is explicit: document state (pages/theme/mode) lives in the store; framing state lives in the view instance.
+- **Viewport + background controls** — viewport-width presets (`fill` / `1280` / `768` / `375`) and canvas background, driving **`canvas.set`** (§5). These frame the render (`CanvasControls`, `src/types.ts`): they are NOT part of the document and NOT persisted to `app.data.kv`, but they live in the **store's view-session** (not a private view field) so `canvas.set` can drive them headless (§11). The boundary is explicit: document state (pages/theme/mode) persists to the doc; framing state is store-session, non-persisted.
+- **TSX export button** — a `TSX 내보내기` button invoking **`export.tsx`** on the active page and presenting the result (§ Export presentation law).
+
+### Export presentation law (pinned)
+
+The `TSX 내보내기` button calls `export.tsx` and presents the returned `tsx` in a **selectable code overlay inside the shadow root** — a scrollable, user-selectable `<pre>`/`<textarea>` the user can select-all and copy. This plugin declares **no** `clipboard:read`/`clipboard:write` permission (§8), so the core `ctx.app.clipboard` surface is **absent** (it materializes in `src/plugins/api.ts` only under a clipboard permission). One-click copy-to-clipboard is therefore **NOT** available in v3 without expanding the permission set; the pinned presentation is the in-shadow selectable overlay, which needs no new permission. (If a future revision adds `clipboard:write`, the overlay MAY add a copy button; the permission set stays as §8 until then.)
+
+### Selection law
+
+Selection is a session concept, not a document concept. Its shape is `{ pageId, nodeId | null }` (`src/types.ts` `Selection`), held in the store's **view-session** (NOT persisted in the doc, NOT written to `app.data.kv`, §11).
+
+- **Three convergent writers.** The selection is set by (1) the `canvas.select` command, (2) a **tree-node click** in the structure panel, and (3) a **canvas click** on a rendered node. All three write the **same** store field — there is one selection, not three.
+- **View binding.** The view highlights the selected node in **both** the tree (structure panel) and the canvas (a selection outline on the rendered element); the inspector (§ Inspector law) binds its form to the selected node.
+- **Survives re-render.** A mutation that re-renders the page keeps the selection (the `nodeId` is stable, §2 id law). Selection **clears** (nodeId → null) when the selected node disappears — removed by `comp.remove`, or the active page switches to one where the id does not exist — so the inspector never binds to a dead node.
+- **Headless.** `canvas.select` mutates the store field with no view mounted; the selection persists for the next mount, which highlights it (§5).
+
+### Inspector law
+
+The inspector panel renders a prop form **generated from the catalog entry** (`catalog.doc`, §6) of the selected node's `type`. There is no hand-written form per component — the form is derived, so it covers all 99 components uniformly. Control mapping by catalog prop `type`:
+
+- catalog `enum` present → Astryx **`Selector`** over the enum members.
+- catalog `type` `"boolean"` → Astryx **`Switch`**.
+- catalog `type` `"number"`, or a spacing prop (a `0–12` spacing scale) → **`TextInput`** (numeric), or a **`Slider`** for a bounded `0–12` spacing prop.
+- catalog `type` `"string"` → **`TextInput`**.
+- the universal `style` / `className` props (universal props law, §6) → **raw text `TextInput`s**.
+- a prop whose catalog `type` is a callback (`"=>"`) or `ReactNode`, or otherwise not JSON-representable → a **read-only note** (not editable; §2 forbids callback/component props on the tree path).
+
+Every edit **dispatches `comp.set`** through the SAME in-process `execute` the toolbar uses — one truth, no direct store mutation. Validation is the command's (§2 prop validation law); an `INVALID_PROP` outcome surfaces inline, the store is untouched.
+
+For a **tsx page** the inspector shows a **read-only notice** pointing to `page.code.get` / `page.code.set` (a tsx page has no nodes to inspect, §2); the structure panel likewise shows the tsx notice, and the tree-op kind gate (§2) already blocks `comp.*`.
+
+### All-elements-command clause (owner law)
+
+Every interactive element in the view maps **1:1 to a registry command** — the view is a command **client**, never a private state machine:
+
+| View element | Command |
+|--------------|---------|
+| Page selector | `preview.open` / `preview.refresh` (sets `activePageId`) |
+| Theme / mode selectors | `theme.set` |
+| Viewport / background controls | `canvas.set` |
+| TSX export button | `export.tsx` |
+| Tree-node click / canvas click / selection outline | `canvas.select` |
+| Inspector field edit | `comp.set` |
+| Structure-panel add / remove / move (tree page) | `comp.add` / `comp.remove` / `comp.move` |
+
+No view control mutates the store directly; each routes through `execute`. This is why an LLM can drive the whole surface headless ("select that button" → `canvas.select`; "show me 375 width" → `canvas.set`) and why UI and CLI/MCP can never diverge.
 
 ### Rendering core law (reused engine)
 
@@ -511,7 +603,13 @@ One in-memory store holds the working `DesignDoc` (the erd pattern: a single sou
 - On every mutation: the store writes back with `app.data.kv.set(key, doc)`.
 - `app.data.kv.watch` keeps multiple windows of the same project consistent (re-hydrate on external change → `onChange` → live view re-render, §7).
 
-Commands are headless-complete: they never require a view. The **active canvas page** (`preview.activePageId` — the page the mounted view renders, §7 Live law) is the sole session field; it is NOT persisted. The v2 session fields `engine`/`url`/`server` are removed (there is no browser engine, artifact url, or http server). `CanvasControls` (viewport width, background) is view-local, not stored (§7 Toolbar law).
+Commands are headless-complete: they never require a view. The store holds a **view-session** alongside the persisted doc — three fields, **none persisted** to `app.data.kv` (only the `DesignDoc` persists):
+
+- **active canvas page** (`preview.activePageId` — the page the mounted view renders, §7 Live law).
+- **selection** (`Selection` = `{ pageId, nodeId | null }`, §7 Selection law) — set by `canvas.select`, tree click, or canvas click; cleared when the selected node disappears.
+- **canvas framing** (`CanvasControls` = viewport width + background, §7 Toolbar law) — set by `canvas.set`.
+
+These are session, not document: they mutate via commands (so an LLM drives them headless) and survive across mounts within the store's life, but they never enter the kv doc. The v2 session fields `engine`/`url`/`server` are removed (there is no browser engine, artifact url, or http server).
 
 ---
 

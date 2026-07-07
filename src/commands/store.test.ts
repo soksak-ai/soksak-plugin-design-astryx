@@ -5,6 +5,7 @@ import {
   coerceDoc,
   createStore,
   activePagePayload,
+  reconcileSelection,
   type DataKv,
 } from "./store";
 import type { DesignDoc, DesignNode, DesignPage } from "../types";
@@ -339,5 +340,64 @@ describe("activePagePayload", () => {
     s.doc = { version: 1, activeTheme: "neutral", pages: [treePage()], seq: 1 };
     s.preview.activePageId = "p1";
     expect(activePagePayload(s)?.mode).toBe("system");
+  });
+});
+
+// ── 뷰-세션 필드(§7·§11): selection·canvasControls — 영속 안 함, 명령으로 몰아 헤드리스 ─────────
+describe("뷰-세션 필드 초기값", () => {
+  it("selection 은 null, canvasControls 는 fill·중립 배경(freshCanvasControls)", () => {
+    const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
+    expect(s.selection).toBeNull();
+    expect(s.canvasControls).toEqual({ width: "fill", background: "" });
+  });
+});
+
+describe("reconcileSelection", () => {
+  it("null 선택은 null", () => {
+    expect(reconcileSelection(goodDoc(), null)).toBeNull();
+  });
+
+  it("페이지가 사라지면 선택 전체 해제(null)", () => {
+    expect(reconcileSelection(goodDoc(), { pageId: "p-gone", nodeId: "n1" })).toBeNull();
+  });
+
+  it("페이지-only 선택(nodeId null)은 페이지가 있으면 유지", () => {
+    const sel = { pageId: "p1", nodeId: null };
+    expect(reconcileSelection(goodDoc(), sel)).toEqual(sel);
+  });
+
+  it("살아있는 노드 선택은 그대로 유지(동일 참조)", () => {
+    const sel = { pageId: "p1", nodeId: "n1" };
+    expect(reconcileSelection(goodDoc(), sel)).toBe(sel);
+  });
+
+  it("사라진 노드 선택은 nodeId 만 null 로(페이지는 유지)", () => {
+    expect(reconcileSelection(goodDoc(), { pageId: "p1", nodeId: "n-gone" })).toEqual({
+      pageId: "p1",
+      nodeId: null,
+    });
+  });
+
+  it("tsx 페이지의 노드 선택은 정리(노드 id 없음)", () => {
+    const d: DesignDoc = { version: 1, activeTheme: "neutral", mode: "system", pages: [tsxPage()], seq: 2 };
+    expect(reconcileSelection(d, { pageId: "p2", nodeId: "n2" })).toEqual({ pageId: "p2", nodeId: null });
+  });
+});
+
+describe("persist 는 선택을 정합한다(재렌더 통지 전)", () => {
+  it("죽은 노드 선택은 persist 후 nodeId 가 정리된다", async () => {
+    const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
+    s.doc = goodDoc();
+    s.selection = { pageId: "p1", nodeId: "n-removed" }; // 문서에 없는 노드
+    await s.persist();
+    expect(s.selection).toEqual({ pageId: "p1", nodeId: null });
+  });
+
+  it("살아있는 선택은 persist 후 보존", async () => {
+    const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
+    s.doc = goodDoc();
+    s.selection = { pageId: "p1", nodeId: "n1" };
+    await s.persist();
+    expect(s.selection).toEqual({ pageId: "p1", nodeId: "n1" });
   });
 });

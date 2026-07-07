@@ -11,6 +11,10 @@ export type ComponentRegistry = Record<string, unknown>;
 // 없으면(테스트 등) 입력 리매핑을 건너뛴다 — 순수 렌더 경로는 카탈로그 무의존.
 export interface RenderOptions {
   controlledInputs?: ReadonlySet<string>;
+  // 캔버스 클릭→노드 선택 seam(CONTRACT §7 Selection law) — 켜면 각 렌더 노드에 data-node-id 를 실어
+  // 뷰가 event.target.closest('[data-node-id]') 로 클릭된 노드를 역매핑한다. 기본 꺼짐이라 러너식
+  // 소비자(뷰 밖)는 이 attr 없이 v2 와 동일하게 렌더된다 — 뷰만 켠다(minimal seam).
+  nodeIdAttr?: boolean;
 }
 
 // 안정 no-op — 매 렌더 새 함수를 만들지 않도록 모듈 스코프 단일 인스턴스.
@@ -131,6 +135,9 @@ export function renderNode(
   const { children: _children, ...rest } = node.props;
   void _children;
   const props = sanitizeProps(node.type, rest, opts);
+  // 캔버스 클릭 역매핑 seam(§7) — 뷰가 켤 때만 각 엘리먼트에 data-node-id 를 얹는다. astryx 컴포넌트는
+  // 미지 prop 을 루트 DOM 으로 spread 하므로 attr 이 DOM 에 도달한다. 기본 꺼짐 → 러너식 소비자 불변.
+  if (opts?.nodeIdAttr) props["data-node-id"] = node.id;
   const kids = resolveChildren(node, (child) => renderNode(child, registry, opts));
 
   const element = React.createElement(

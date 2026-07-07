@@ -13,10 +13,13 @@ import {
   type RunnerPage,
   type ThemeName,
   type ColorMode,
+  type Selection,
+  type CanvasControls,
+  freshCanvasControls,
   THEMES,
   COLOR_MODES,
 } from "../types";
-import { coercePage } from "../model";
+import { coercePage, findInPage } from "../model";
 
 // 미리보기 세션 상태 — 영속 대상 아님. 마운트된 캔버스 뷰가 렌더하는 활성 페이지 id(§11). v2 의
 // engine/url/server 필드는 제거됐다 — 브라우저 엔진·아티팩트 url·http 서버가 없다(§7 Legacy-removal law).
@@ -35,7 +38,11 @@ export interface DesignStore {
   doc: DesignDoc; // 작업 문서(모델이 제자리 변이, watch 재수화 시 교체). 핸들러는 호출 시점에 참조.
   dir: string; // 플러그인 설치 디렉토리(= PluginContext.dir). v3 는 디스크 아티팩트가 없어 렌더에 미사용 — 향후 확장 여지.
   preview: PreviewSession; // 세션 상태(활성 캔버스 페이지) — 영속 안 함.
-  persist(): Promise<void>; // 변이 후 doc 를 kv 에 기록(멱등) + notify(라이브 재렌더).
+  // 뷰-세션(§7·§11) — 셋 다 영속 안 함(문서만 kv 로). canvas.select·tree/canvas 클릭이 selection 에,
+  // canvas.set·툴바가 canvasControls 에 수렴한다. null selection = 아무것도 선택 안 됨.
+  selection: Selection | null; // 선택(§7 Selection law) — 세 진입점 수렴, 죽은 노드는 persist 시 정리.
+  canvasControls: CanvasControls; // 프레이밍(§7 Toolbar law) — 뷰포트 폭·배경, 렌더 프레임(문서 아님).
+  persist(): Promise<void>; // 변이 후 doc 를 kv 에 기록(멱등) + 선택 정합 + notify(라이브 재렌더).
   hydrate(): Promise<void>; // kv 에서 doc 복원(활성화 직후 1회, 비동기 — 등록은 즉시) + notify.
   subscribe(cb: () => void): () => void; // 뷰가 재렌더 콜백을 건다(§7 Live law). 해제 함수 반환.
   notify(): void; // 구독자 전원에 변경 통지 — preview.open/refresh 가 activePageId 변경 후 직접 부른다.
@@ -96,6 +103,18 @@ export function activePagePayload(store: DesignStore): DesignPayload | null {
   return { theme: store.doc.activeTheme, mode: store.doc.mode ?? "system", page: rp };
 }
 
+// 선택 정합(§7 Selection law) — 선택 노드가 사라지면 nodeId 를 null 로 정리한다(인스펙터가 죽은
+// 노드에 바인딩하지 않게). 페이지 자체가 사라지면 선택 전체 해제. 문서 변이(persist)·외부 변경
+// (rehydrate) 뒤에 부른다. 순수 — doc 를 읽기만 한다. tsx 전환(트리→tsx)도 findInPage 가 null 이라 정리됨.
+export function reconcileSelection(doc: DesignDoc, sel: Selection | null): Selection | null {
+  if (!sel) return null;
+  const page = doc.pages.find((p) => p.id === sel.pageId);
+  if (!page) return null; // 페이지 삭제 → 선택 해제.
+  if (sel.nodeId === null) return sel; // 페이지-only 선택은 유지.
+  const alive = findInPage(page, sel.nodeId) !== null; // 노드 삭제·tsx 전환 → null.
+  return alive ? sel : { pageId: sel.pageId, nodeId: null };
+}
+
 // 스토어 생성 — 동기 구성(doc=freshDoc)으로 즉시 반환한다. 하이드레이트는 별도 async(활성화 직후
 // void store.hydrate()). 이렇게 하면 명령 등록이 하이드레이트를 안 기다려 E2E 적재 경쟁이 없다.
 // 하이드레이트 진행 중 변이가 나면 우리 상태가 최신이므로 재수화 스왑을 건너뛴다(정합).
@@ -122,6 +141,8 @@ export function createStore(opts: {
     doc: freshDoc(),
     dir,
     preview: { activePageId: null },
+    selection: null, // 아무것도 선택 안 됨(§7).
+    canvasControls: freshCanvasControls(), // 뷰포트 fill·중립 배경(§7 Toolbar law).
     persist,
     hydrate,
     subscribe,
@@ -157,6 +178,7 @@ export function createStore(opts: {
         writing--;
       }
     }
+    store.selection = reconcileSelection(store.doc, store.selection); // 죽은 노드 선택 정리(§7).
     notify(); // 라이브 뷰 재렌더(§7 Live law) — kv 유무와 무관하게 변이는 통지한다.
   }
 
@@ -168,6 +190,7 @@ export function createStore(opts: {
       const v = await kv.get(key);
       if (staleHydrate) return; // 대기 중 변이 발생 → 인메모리(이미 영속됨)가 최신.
       store.doc = coerceDoc(v);
+      store.selection = reconcileSelection(store.doc, store.selection); // 복원 문서 기준 선택 정합(§7).
       notify();
     } catch {
       // 읽기 실패는 현 상태 유지(신선 문서로 계속).
@@ -180,6 +203,7 @@ export function createStore(opts: {
     if (!kv) return;
     try {
       store.doc = coerceDoc(await kv.get(key));
+      store.selection = reconcileSelection(store.doc, store.selection); // 외부 변경 문서 기준 정합(§7).
       notify();
     } catch {
       // 유지.

@@ -42,6 +42,8 @@ soksak 터미널 앱을 위한 "말로 하는 디자인" 플러그인.
 | `catalog.doc` | `{ type }` | 카탈로그 엔트리 전체: props·enum·기본값·`acceptsChildren`. |
 | `preview.open` | `{ pageId }` | 페이지 선택 후 인앱 캔버스 뷰 열기/포커스. |
 | `preview.refresh` | `{ pageId? }` | 캔버스 명시적 재렌더(뷰 없으면 무연산). |
+| `canvas.select` | `{ pageId?, nodeId }` | 뷰-세션 선택 설정(구조 트리·캔버스 클릭이 쓰는 같은 필드). `pageId` 는 활성 페이지 기본, `nodeId` null 은 노드 해제(페이지만). 비 null `nodeId` 는 살아있는 tree 페이지 노드여야 함 → 아니면 `NOT_FOUND`. |
+| `canvas.set` | `{ viewport?, background? }` | 뷰-세션 프레이밍 설정: `viewport` `fill`/`1280`/`768`/`375`(잘못된 값 → `data.validValues` 실은 `INVALID_PROP`), `background` CSS 색 또는 `neutral`/`''` 로 기본. 최소 하나 필수. |
 | `export.tsx` | `{ pageId }` | 페이지의 TSX(tsx 페이지 `code` verbatim, 또는 트리 직렬화기). |
 
 에러 `code` 는 닫힌 집합이다: `NOT_FOUND`, `INVALID_TYPE`, `INVALID_PROP`, `INVALID_TARGET`, `INVALID_ARG`, `DUPLICATE`, `TEMPLATE_UNKNOWN`, `TEMPLATE_UNAVAILABLE`, `THEME_UNKNOWN`, `COMPILE_FAILED`, `PREVIEW_FAILED`, `EXPORT_FAILED`.
@@ -52,11 +54,12 @@ soksak 터미널 앱을 위한 "말로 하는 디자인" 플러그인.
 
 뷰는 활성 페이지의 Astryx 컴포넌트를 앱 웹뷰 안 Shadow DOM 에 React 트리로 **직접** 마운트하고, 명령이 변형하는 같은 모듈 스토어에 라이브 바인딩한다 — 그래서 모든 명령(`comp.*`, `page.*`, `theme.set`, `template.apply`, `page.code.set`)이 활성 페이지를 즉시 재렌더하며 내비게이션도 디스크 기록도 없다. Shadow DOM 이 전역 CSS 리셋을 격리한다(erd 선례): 뷰는 `reset.css` → `astryx.css`(`:root` 를 `:host` 로 치환) → 테마 7종 블록을 shadow 에 주입하고, 활성 테마는 shadow 호스트 래퍼의 `data-astryx-theme` + `color-scheme` 로 싣는다. 테마·모드 전환은 그 속성을 제자리에서 바꾼다.
 
-뷰 크롬은 렌더 영역 위 툴바이고, 컨트롤은 전부 명령 클라이언트다(헤드리스와 UI 가 한 진실):
+뷰 크롬은 Astryx 자신으로 도그푸드한 3-패널 프레임이다(Layout + LayoutPanel + LayoutContent): **구조** 패널(왼쪽, ~260px), 캔버스(가운데), **인스펙터** 패널(오른쪽, ~320px), 위에 툴바 헤더. 모든 컨트롤은 명령 클라이언트다(헤드리스와 UI 가 한 진실):
 
-- **페이지 선택기** — 문서의 페이지를 나열하고 활성 페이지를 고른다.
-- **테마(7) + 모드(라이트/다크/시스템) 선택기** — `theme.set` 을 구동한다.
-- **캔버스 컨트롤** — 뷰포트 폭 프리셋(`fill` / `1280` / `768` / `375`)과 캔버스 배경. 뷰-로컬 프레이밍이라 문서의 일부가 아니고 저장되지 않으며 창마다 독립이다.
+- **툴바 헤더** — 페이지 선택기, `theme.set` 을 구동하는 테마(7) + 모드(라이트/다크/시스템) 선택기, `canvas.set` 을 구동하는 뷰포트/배경 프레이밍, `TSX 내보내기`(`export.tsx`) 버튼.
+- **구조 패널** — 활성 페이지 노드 트리를 투영하는 `TreeList`(tsx 페이지는 읽기전용 `⌁ code` 행 하나). 노드 클릭은 `canvas.select` 로 흐른다.
+- **인스펙터 패널** — 선택 노드의 `catalog.doc` 스키마로 만든 prop 폼(enum → Selector, boolean → Switch, spacing → 스테퍼, string/number/style → 텍스트), 편집 시 `comp.set` dispatch.
+- **캔버스** — 렌더된 노드 클릭은 `canvas.select` 로 흐르고, 선택은 트리와 캔버스 양쪽에서 하이라이트된다. 프레이밍(`canvas.set`)과 선택(`canvas.select`)은 뷰-로컬 뷰-세션 상태다 — 문서의 일부가 아니고 저장되지 않으며 창마다 독립이되, 완전히 명령 가능해 LLM 이 헤드리스로 프레이밍·선택할 수 있다.
 
 렌더 코어(이전 전송에서 재사용)는 `page.kind` 로 분기한다: **tree** 페이지는 각 `node.type` 을 `@astryxdesign/core` 바렐에서 해소해 트리를 렌더하고, **tsx** 페이지는 sucrase 로 컴파일해 `react`·`@astryxdesign/core` 바렐·heroicons·lucide 를 번들에서 해소하는 require-shim 으로 마운트한다(default export 무손실 마운트). 컴파일·런타임 오류는 빈 화면이 아니라 보이는 오류 표면으로 렌더한다.
 

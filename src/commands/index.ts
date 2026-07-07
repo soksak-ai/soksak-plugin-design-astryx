@@ -17,6 +17,7 @@ import {
 import { isErr, errMsg, asString, asNonEmptyString } from "./envelope";
 import { resolveThemeMode } from "./theme-mode";
 import { compileGate } from "./compile";
+import { resolveSelection, applyCanvasSet } from "./canvas-session";
 import type { DesignStore } from "./store";
 
 // 트리 모델·카탈로그·템플릿·내보내기·문서(각 병렬 에이전트 소유 — CONTRACT 시그니처에 맞춘다).
@@ -607,6 +608,55 @@ export function registerCommands(ctx: Ctx, store: DesignStore): void {
       return { pageId: store.preview.activePageId };
     },
     { pageId: { type: "string", description: "Page id to make active (defaults to the current active page)." } },
+  );
+
+  // ── canvas.* (뷰-세션: 선택·프레이밍 — 문서 아님, 명령으로 몰아 헤드리스·UI 단일 진실, §7·§11) ──
+  // 둘 다 세션만 변이하고 store.notify() 로 재렌더를 넛지한다(persist 아님 — kv 문서엔 안 들어감).
+  add(
+    "canvas.select",
+    "Set the canvas selection to {pageId?, nodeId} in the view-session (the SAME field the tree-node click and canvas click write). pageId defaults to the active canvas page; nodeId null clears the node (page-only). A non-null nodeId must name an existing node on the page (a tree-page node id) — else NOT_FOUND (a tsx page has no node ids). Headless-complete: the selection lands in the store and a mounted view re-highlights.",
+    { ko: "캔버스 선택 노드 고르기 select 하이라이트 지목" },
+    (d) =>
+      d.nodeId
+        ? `${d.type} 노드(${d.nodeId}) 선택.`
+        : `페이지 ${d.pageId} 선택(노드 해제).`,
+    (params) => {
+      const r = resolveSelection(store.doc, store.preview.activePageId, params ?? {});
+      if (isErr(r)) return r;
+      store.selection = r.selection;
+      store.notify(); // 세션 변이(문서 아님) → 재렌더 넛지, persist 없음(§11).
+      return { pageId: r.selection.pageId, nodeId: r.selection.nodeId, type: r.type };
+    },
+    {
+      pageId: { type: "string", description: "Page to select on (defaults to the active canvas page)." },
+      nodeId: { type: "json", required: true, description: "Node id to select, or null to clear (page-only)." },
+    },
+    (d) =>
+      d.nodeId
+        ? [
+            { cmd: cmd("catalog.doc"), why: "선택 노드의 속성 문서를 볼 수 있습니다." },
+            { cmd: cmd("comp.set"), why: "선택 노드의 속성을 갱신할 수 있습니다." },
+          ]
+        : [],
+  );
+
+  add(
+    "canvas.set",
+    "Set the canvas framing controls (viewport width and/or background) in the view-session — the SAME field the toolbar's viewport/background controls write. Enum-validates viewport against fill|1280|768|375 (INVALID_PROP with data.validValues on a bad value); background 'neutral' or '' resets to the neutral default, any other string is a raw CSS color. At least one of viewport/background is required. Headless-complete: the framing lands in the store and a mounted view re-frames.",
+    { ko: "캔버스 프레이밍 뷰포트 배경 폭 설정 set" },
+    (d) => `캔버스 프레이밍 갱신(뷰포트 ${d.viewport}).`,
+    (params) => {
+      const r = applyCanvasSet(store.canvasControls, params ?? {});
+      if (isErr(r)) return r;
+      store.canvasControls = r.next;
+      store.notify(); // 세션 변이(문서 아님) → 재렌더 넛지, persist 없음(§11).
+      return { viewport: r.next.width, background: r.next.background };
+    },
+    {
+      viewport: { type: "json", description: "Viewport width preset: fill, 1280, 768, or 375." },
+      background: { type: "string", description: "Canvas background CSS color, or 'neutral'/'' for the neutral default." },
+    },
+    () => [{ cmd: cmd("preview.open"), why: "캔버스에서 프레이밍을 확인할 수 있습니다." }],
   );
 
   // ── export.tsx ───────────────────────────────────────────────────────────────

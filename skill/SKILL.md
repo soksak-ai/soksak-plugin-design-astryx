@@ -123,6 +123,9 @@ sok plugin.soksak-plugin-design-astryx.comp.set  pageId=<p> nodeId=<btnId> props
 # RENDER + LOOK — the whole point
 sok plugin.soksak-plugin-design-astryx.preview.open pageId=<p>   # opens/focuses the in-app canvas tab
 sok window.snapshot        # capture the app window; READ the PNG (soksak-dev / soksak-debug skill)
+# FRAME + SELECT headlessly — the view chrome's controls, driven by command:
+sok plugin.soksak-plugin-design-astryx.canvas.set viewport=375        # frame at a phone width to judge responsive
+sok plugin.soksak-plugin-design-astryx.canvas.select pageId=<p> nodeId=<n>  # highlight a node in tree + canvas, load it in the inspector
 # iterate: every mutation re-renders the canvas live; nudge an explicit re-render if needed
 sok plugin.soksak-plugin-design-astryx.preview.refresh pageId=<p>
 
@@ -132,11 +135,13 @@ sok plugin.soksak-plugin-design-astryx.export.tsx pageId=<p>
 
 **The canvas is the verification, not a nicety.** `preview.open` selects the page as the canvas's active page and opens (or focuses) the in-app canvas tab, which mounts the Astryx components directly in the app webview (Shadow DOM), live-bound to the document. Every mutating command re-renders the active page in place — no server, no browser, no artifact on disk; `preview.refresh` and `theme.set` are explicit re-render nudges, not navigation. Never claim a design is done from tree structure alone — snapshot the window, read the pixels, fix what looks wrong, look again.
 
+**The canvas view is a three-pane frame** (dogfooded from Astryx itself): a **structure** tree on the left, the canvas in the center, and an **inspector** on the right. Clicking a node in the tree or the canvas is `canvas.select` — it highlights in both panes and loads that node's props into the inspector, whose form is built from the node's `catalog.doc` schema and edits through `comp.set`. `canvas.set` frames the canvas (viewport width, background). Selection and framing are view-session state (per-window, never persisted), but every one of these controls is a command — so an LLM frames the phone width or selects "that button" headlessly, exactly as a click would.
+
 **A `Table` inside a `Card` bleeds edge-to-edge on its own** (the container padding system) — never hand-compensate its margins.
 
 **Exported TSX is static.** `export.tsx` serializes the tree to a compilable file wrapped in `<Theme>`. It carries no handlers or state (they were never in the tree) — add interactivity in code after export.
 
-## 7. Command reference (26)
+## 7. Command reference (28)
 
 All commands take one JSON params object and return the v1 envelope `{ ok, code, message, data? }`. Prefix every name with `plugin.soksak-plugin-design-astryx.`.
 
@@ -167,6 +172,8 @@ All commands take one JSON params object and return the v1 envelope `{ ok, code,
 | `catalog.doc` | `{ type }` | Full entry: props, enums, defaults, `acceptsChildren`. |
 | `preview.open` | `{ pageId }` | Select the page and open/focus the in-app canvas tab. |
 | `preview.refresh` | `{ pageId? }` | Force an explicit canvas re-render (headless no-op when no view is open). |
+| `canvas.select` | `{ pageId?, nodeId }` | Set the view-session selection (the same field the structure-tree and canvas clicks write). `pageId` defaults to the active page; `nodeId` null clears to page-only; a non-null `nodeId` must name a live tree-page node → else `NOT_FOUND`. Highlights in both the tree and the canvas. |
+| `canvas.set` | `{ viewport?, background? }` | Set the view-session framing: `viewport` `fill`/`1280`/`768`/`375` (bad value → `INVALID_PROP` with `data.validValues`), `background` a CSS color or `neutral`/`''` for the default. At least one required. |
 | `export.tsx` | `{ pageId }` | TSX for the page — a tsx page's `code` verbatim, or the tree serializer. |
 
 The 7 themes: `butter`, `chocolate`, `gothic`, `matcha`, `neutral`, `stone`, `y2k`; `mode` is `light`, `dark`, or `system` (default `system`). `gothic` is dark-only — an effective `light` mode is rejected with `INVALID_PROP`.
