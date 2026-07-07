@@ -5,17 +5,30 @@
   "version": "0.1.0",
   "repo": "https://github.com/soksak-ai/soksak-plugin-design-astryx.git",
   "description": {
-    "en": "Design by talking — build pages as a tree (component tree, comp.* editable) or as tsx (verbatim 'use client' source, seeded from 619 shipped Astryx templates and edited by page.code.set), preview them in a browser view, and export TSX. Headless: every capability is a command, driven from CLI/MCP.",
-    "ko": "말로 하는 디자인 — 페이지를 트리(컴포넌트 트리, comp.* 편집) 또는 tsx(원본 'use client' 소스 — 619개 shipped Astryx 템플릿에서 시드해 page.code.set 으로 편집)로 조립하고 브라우저 뷰로 미리보고 TSX 로 내보낸다. 헤드리스: 모든 기능이 명령이라 CLI/MCP 로 구동한다."
+    "en": "Design by talking — build pages as a tree (component tree, comp.* editable) or as tsx (verbatim 'use client' source, seeded from 619 shipped Astryx templates and edited by page.code.set), render them live in an in-app canvas view, and export TSX. Headless: every capability is a command, driven from CLI/MCP.",
+    "ko": "말로 하는 디자인 — 페이지를 트리(컴포넌트 트리, comp.* 편집) 또는 tsx(원본 'use client' 소스 — 619개 shipped Astryx 템플릿에서 시드해 page.code.set 으로 편집)로 조립하고 앱 내 캔버스 뷰로 라이브 렌더하고 TSX 로 내보낸다. 헤드리스: 모든 기능이 명령이라 CLI/MCP 로 구동한다."
   },
   "entry": "main.js",
-  "dependencies": {
-    "soksak-plugin-browser-chromium": "^0.1.0",
-    "soksak-plugin-browser-native": "^2.0.0"
-  },
-  "permissions": ["commands", "data", "fs:write",
-    "process"],
+  "permissions": ["ui", "commands", "data", "programs"],
   "contributes": {
+    "views": [
+      {
+        "id": "canvas",
+        "title": { "en": "Astryx Design", "ko": "Astryx 디자인" },
+        "icon": "▦",
+        "placements": ["content"],
+        "defaultPlacement": "content"
+      }
+    ],
+    "programs": [
+      {
+        "id": "design-astryx",
+        "title": { "en": "Astryx Design", "ko": "Astryx 디자인" },
+        "path": { "en": "Design", "ko": "디자인" },
+        "kind": "view",
+        "view": "canvas"
+      }
+    ],
     "commands": [
       { "name": "ping", "title": { "en": "Ping (load/version check)", "ko": "플러그인 적재/버전 확인(E2E)" } },
       { "name": "state", "title": { "en": "Get document state", "ko": "문서 상태 조회" } },
@@ -40,8 +53,8 @@
       { "name": "catalog.doc", "title": { "en": "Component catalog doc", "ko": "컴포넌트 카탈로그 문서" } },
       { "name": "docs.list", "title": { "en": "List doctrine topics", "ko": "독트린 문서 목록" } },
       { "name": "docs.get", "title": { "en": "Get doctrine topic", "ko": "독트린 문서 조회" } },
-      { "name": "preview.open", "title": { "en": "Open preview", "ko": "미리보기 열기" } },
-      { "name": "preview.refresh", "title": { "en": "Refresh preview", "ko": "미리보기 갱신" } },
+      { "name": "preview.open", "title": { "en": "Open canvas", "ko": "캔버스 열기" } },
+      { "name": "preview.refresh", "title": { "en": "Re-render canvas", "ko": "캔버스 재렌더" } },
       { "name": "export.tsx", "title": { "en": "Export TSX", "ko": "TSX 내보내기" } }
     ],
     "skill": { "path": "skill/SKILL.md" }

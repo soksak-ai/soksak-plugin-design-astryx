@@ -1,11 +1,11 @@
 ---
 name: soksak-design-astryx
-description: Use when designing a screen, page, UI, app, or mockup by talking inside soksak — drive the Astryx design plugin entirely by CLI/MCP commands (`sok plugin.soksak-plugin-design-astryx.*`). A page is one of two kinds: apply one of Astryx's 619 shipped TSX templates as a tsx page (source is the truth, rendered losslessly) and edit it with page.code.set, or compose a component tree by command (create pages, add/set/move/find components) on a tree page. Set the theme and light/dark mode, preview it live in a browser view, and export TSX. You edit only through commands and LOOK at the rendered preview. Headless: works without opening the GUI. 디자인, 화면, UI, 앱, 목업, 와이어프레임, 페이지 만들기, 템플릿 적용, TSX 편집, 컴포넌트 추가, 레이아웃, 테마, 미리보기, TSX 내보내기도 여기. デザイン, 画面, モックアップ, テンプレート, ワイヤーフレーム, レイアウト, コンポーネント, テーマ, プレビュー.
+description: Use when designing a screen, page, UI, app, or mockup by talking inside soksak — drive the Astryx design plugin entirely by CLI/MCP commands (`sok plugin.soksak-plugin-design-astryx.*`). A page is one of two kinds: apply one of Astryx's 619 shipped TSX templates as a tsx page (source is the truth, rendered losslessly) and edit it with page.code.set, or compose a component tree by command (create pages, add/set/move/find components) on a tree page. Set the theme and light/dark/system mode, preview it live in an in-app canvas view, and export TSX. You edit only through commands and LOOK at the rendered canvas. Headless: works without opening the GUI. 디자인, 화면, UI, 앱, 목업, 와이어프레임, 페이지 만들기, 템플릿 적용, TSX 편집, 컴포넌트 추가, 레이아웃, 테마, 미리보기, TSX 내보내기도 여기. デザイン, 画面, モックアップ, テンプレート, ワイヤーフレーム, レイアウト, コンポーネント, テーマ, プレビュー.
 ---
 
 # soksak Astryx design — design by talking
 
-The design document is **one Astryx component tree** (`@astryxdesign/core`), not a canvas of freehand shapes. You compose typed components, set a theme, render a self-contained preview to disk, point a browser view at it, and **look at the pixels**. Every capability is a command over `sok` CLI, MCP, and the e2e socket. The plugin holds one working document per project (the single source of truth), persists it to `app.data`, and re-hydrates across windows.
+The design document is a set of Astryx pages (`@astryxdesign/core`) — each a typed component tree or an original TSX program — not a freeform drawing surface. You compose typed components or apply a template, set a theme, and mount the result live in an **in-app canvas view** where Astryx components render directly in the app webview, bound to the same document the commands mutate — every command re-renders instantly. Then **look at the pixels**. Every capability is a command over `sok` CLI, MCP, and the e2e socket. The plugin holds one working document per project (the single source of truth), persists it to `app.data`, and re-hydrates across windows.
 
 This is Meta's Astryx design system. Follow its doctrine — the sections below are the doctrine, adapted to this plugin's command surface. The failure mode of AI design is the generic-prototype look: content dropped into a page with no frame, everything wrapped in cards, hand-set colors and pixels fighting the theme. The doctrine below exists to prevent exactly that.
 
@@ -121,16 +121,16 @@ sok plugin.soksak-plugin-design-astryx.comp.add pageId=<p> parentId=<sectionId> 
 sok plugin.soksak-plugin-design-astryx.comp.set  pageId=<p> nodeId=<btnId> props='{"size":"lg"}'
 
 # RENDER + LOOK — the whole point
-sok plugin.soksak-plugin-design-astryx.preview.open pageId=<p>
-sok window.snapshot        # capture the browser view; READ the PNG (soksak-dev / soksak-debug skill)
-# iterate: mutate, then re-emit and reload
+sok plugin.soksak-plugin-design-astryx.preview.open pageId=<p>   # opens/focuses the in-app canvas tab
+sok window.snapshot        # capture the app window; READ the PNG (soksak-dev / soksak-debug skill)
+# iterate: every mutation re-renders the canvas live; nudge an explicit re-render if needed
 sok plugin.soksak-plugin-design-astryx.preview.refresh pageId=<p>
 
 # HAND OFF working code
 sok plugin.soksak-plugin-design-astryx.export.tsx pageId=<p>
 ```
 
-**The preview is the verification, not a nicety.** `preview.open` writes a standalone document to disk and drives a browser dependency (Chromium preferred, native fallback) to its file URL; `preview.refresh` and `theme.set` re-emit and reload. Never claim a design is done from tree structure alone — snapshot the view, read the pixels, fix what looks wrong, refresh, look again.
+**The canvas is the verification, not a nicety.** `preview.open` selects the page as the canvas's active page and opens (or focuses) the in-app canvas tab, which mounts the Astryx components directly in the app webview (Shadow DOM), live-bound to the document. Every mutating command re-renders the active page in place — no server, no browser, no artifact on disk; `preview.refresh` and `theme.set` are explicit re-render nudges, not navigation. Never claim a design is done from tree structure alone — snapshot the window, read the pixels, fix what looks wrong, look again.
 
 **A `Table` inside a `Card` bleeds edge-to-edge on its own** (the container padding system) — never hand-compensate its margins.
 
@@ -159,22 +159,22 @@ All commands take one JSON params object and return the v1 envelope `{ ok, code,
 | `comp.remove` | `{ pageId, nodeId }` | Remove a node and its subtree (not the root). Tree pages only. |
 | `comp.get` | `{ pageId, nodeId }` | The full subtree. Tree pages only. |
 | `comp.find` | `{ pageId?, type?, propContains? }` | Locate matching nodes. Tree pages only. |
-| `theme.set` | `{ theme, mode? }` | Set the active theme and light/dark mode; re-emit an open preview. |
+| `theme.set` | `{ theme, mode? }` | Set the active theme and light/dark/system mode; the mounted canvas re-renders live. |
 | `theme.list` | `{}` | `{ themes, active }` — the 7 themes. |
 | `template.list` | `{ kind?, includeUnavailable? }` | Available templates + counts/reasons of unavailable ones. |
 | `template.apply` | `{ id, pageId?, name? }` | Create a tsx page from a template's verbatim code (unavailable → `TEMPLATE_UNAVAILABLE`). |
 | `catalog.list` | `{ group?, query? }` | Catalog components. |
 | `catalog.doc` | `{ type }` | Full entry: props, enums, defaults, `acceptsChildren`. |
-| `preview.open` | `{ pageId }` | Write the preview artifact and open a browser view. |
-| `preview.refresh` | `{ pageId? }` | Re-emit and reload the current preview. |
+| `preview.open` | `{ pageId }` | Select the page and open/focus the in-app canvas tab. |
+| `preview.refresh` | `{ pageId? }` | Force an explicit canvas re-render (headless no-op when no view is open). |
 | `export.tsx` | `{ pageId }` | TSX for the page — a tsx page's `code` verbatim, or the tree serializer. |
 
-The 7 themes: `butter`, `chocolate`, `gothic`, `matcha`, `neutral`, `stone`, `y2k`; `mode` is `light` or `dark`.
+The 7 themes: `butter`, `chocolate`, `gothic`, `matcha`, `neutral`, `stone`, `y2k`; `mode` is `light`, `dark`, or `system` (default `system`). `gothic` is dark-only — an effective `light` mode is rejected with `INVALID_PROP`.
 
 Every `comp.*` command on a **tsx page** returns `INVALID_TARGET` pointing to `page.code.*`; `page.code.*` on a **tree page** returns `INVALID_TARGET` pointing to `comp.*` / `export.tsx`.
 
 ## 8. Envelope and failure
 
-- Every command returns **`{ ok, code, message, data? }`** — branch on `ok`, never on a legacy `error` field. On failure `code` is a closed set (`NOT_FOUND`, `INVALID_TYPE`, `INVALID_PROP`, `INVALID_TARGET`, `INVALID_ARG`, `DUPLICATE`, `TEMPLATE_UNKNOWN`, `TEMPLATE_UNAVAILABLE`, `THEME_UNKNOWN`, `COMPILE_FAILED`, `PREVIEW_FAILED`, `DEP_MISSING`, `EXPORT_FAILED`) and `message` is human prose; `data` carries the result. `COMPILE_FAILED` (bad `page.code.set` TSX) also carries the compiler error in `data.diagnostics`.
-- It is **headless-complete** — you never open a GUI to design. The tree is the single source of truth; the browser view only renders it.
-- Preview needs a browser dependency enabled. `DEP_MISSING` means neither `soksak-plugin-browser-chromium` nor `soksak-plugin-browser-native` is available — enable one, then `preview.open` again.
+- Every command returns **`{ ok, code, message, data? }`** — branch on `ok`, never on a legacy `error` field. On failure `code` is a closed set (`NOT_FOUND`, `INVALID_TYPE`, `INVALID_PROP`, `INVALID_TARGET`, `INVALID_ARG`, `DUPLICATE`, `TEMPLATE_UNKNOWN`, `TEMPLATE_UNAVAILABLE`, `THEME_UNKNOWN`, `COMPILE_FAILED`, `PREVIEW_FAILED`, `EXPORT_FAILED`) and `message` is human prose; `data` carries the result. `COMPILE_FAILED` (bad `page.code.set` TSX) also carries the compiler error in `data.diagnostics`.
+- It is **headless-complete** — you never open a GUI to design. The document is the single source of truth; the canvas view only renders it, and every editing command works with no view open.
+- The canvas is in-app: there is no browser dependency and no artifact on disk. `preview.open` fails with `PREVIEW_FAILED` only when the canvas view cannot open (e.g. no active project).

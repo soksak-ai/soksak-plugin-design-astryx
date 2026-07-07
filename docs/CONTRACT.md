@@ -8,7 +8,11 @@ Plugin id tokens: `design`, `astryx`. Command first segments never equal or abbr
 
 ## 1. Identity and scope
 
-The plugin is a headless design-document engine. Every capability is a registry command; there is no GUI surface owned by this plugin. The plugin renders by writing a self-contained preview to disk and pointing a dependency browser plugin at it. External LLMs drive it through `sok` CLI, MCP, and the bundled skill.
+The plugin is a headless design-document engine **plus an in-app canvas view** (a plugin program). Every editing capability is a registry command — the document is headless-complete and drives from `sok` CLI, MCP, and the bundled skill with no view open. The **primary design surface** is the canvas view: it mounts Astryx components **directly** as a React tree inside a Shadow DOM in the app webview, **live-bound to the same module store** the commands mutate, so every command re-renders the active page instantly. There is no artifact on disk, no navigation, no server, no browser dependency (§7). The view and the commands are one truth (the toolbar is itself a command client, §7 Toolbar law).
+
+### v2 → v3 pivot (canvas view, browser preview removed)
+
+v3 replaces the v2 browser-preview transport (http server + `file://`-forbidden artifacts driven into a dependency browser plugin) with an in-app canvas view. Rationale — the owner's architecture verdict (the primary surface is a panel program, not a browser document) plus the erd precedent (erd mounts its whole React app inside `attachShadow` to contain a global CSS reset). The Astryx TSX/tree rendering core is **reused** verbatim as the view's rendering engine; only the transport changes. The removed artifacts are enumerated in §7 (Legacy-removal law).
 
 ### Two page kinds (v2 law)
 
@@ -101,12 +105,13 @@ Required props are **not** enforced at write time — the tree is built incremen
 
 The command layer produces exactly these codes (`src/types.ts` `Code`):
 
-`OK`, `NOT_FOUND`, `INVALID_TYPE`, `INVALID_PROP`, `INVALID_TARGET`, `INVALID_ARG`, `DUPLICATE`, `TEMPLATE_UNKNOWN`, `TEMPLATE_UNAVAILABLE`, `THEME_UNKNOWN`, `COMPILE_FAILED`, `PREVIEW_FAILED`, `DEP_MISSING`, `EXPORT_FAILED`.
-
-Two codes are new in v2:
+`OK`, `NOT_FOUND`, `INVALID_TYPE`, `INVALID_PROP`, `INVALID_TARGET`, `INVALID_ARG`, `DUPLICATE`, `TEMPLATE_UNKNOWN`, `TEMPLATE_UNAVAILABLE`, `THEME_UNKNOWN`, `COMPILE_FAILED`, `PREVIEW_FAILED`, `EXPORT_FAILED`.
 
 - `TEMPLATE_UNAVAILABLE` — the template id exists but `available === false` (a missing or compile-time-only dependency; §13). `template.apply` returns it with the template's `reason`. Distinct from `TEMPLATE_UNKNOWN` (id not in `templates.json`).
-- `COMPILE_FAILED` — `page.code.set` was given TSX that does not compile under the runner's sucrase config (§7). The failure envelope carries the compiler error in `data.diagnostics` (§4).
+- `COMPILE_FAILED` — `page.code.set` was given TSX that does not compile under the render core's sucrase config (§7). The failure envelope carries the compiler error in `data.diagnostics` (§4).
+- `PREVIEW_FAILED` — v3 meaning: opening/focusing the canvas view failed (`plugin.view.open` returned non-ok, e.g. no active project). The v2 meaning (artifact write / browser drive) is gone.
+
+**Removed in v3:** `DEP_MISSING` — there is no browser-dependency probe anymore (the canvas is in-app). Any code referencing it is deleted; git remembers (§7 Legacy-removal law).
 
 `PERMISSION_DENIED`, `UNKNOWN_COMMAND`, `INVALID_PARAMS`, `INTERNAL` are core-owned outcomes (produced by `registry.execute`, not by handlers). Handlers never emit them.
 
@@ -222,10 +227,10 @@ Ordering note: `page.create` sets the source once (tree root or starter tsx); `c
 
 ### theme.set
 - params: `{ theme: ThemeName, mode?: ColorMode }` (`ColorMode` = `light` | `dark` | `system`, default `system`)
-- Behavior: sets `activeTheme` and, when `mode` is given, the color mode. `gothic` is dark-only: a call whose **effective** mode is `light` (explicit `mode:"light"`, or an omitted `mode` while the stored mode is `light`) is rejected with `INVALID_PROP`. `mode` validation and the gothic gate run **before** `activeTheme` mutates, so a rejected call leaves the doc untouched. `mode` persists in the doc (§11); an omitted `mode` preserves the stored mode. When a preview is currently open, it re-emits the artifact with the new theme/mode and navigates the browser; a browser failure does not fail the command (the theme/mode change is the primary effect) and surfaces as `previewRefreshed=false`.
-- → `{ theme, mode, previewRefreshed }` (`mode` = the effective mode applied)
+- Behavior: sets `activeTheme` and, when `mode` is given, the color mode. `gothic` is dark-only: a call whose **effective** mode is `light` (explicit `mode:"light"`, or an omitted `mode` while the stored mode is `light`) is rejected with `INVALID_PROP`. `mode` validation and the gothic gate run **before** `activeTheme` mutates, so a rejected call leaves the doc untouched. `mode` persists in the doc (§11); an omitted `mode` preserves the stored mode. The live canvas view (if mounted) re-renders automatically via `store.onChange` — swapping the shadow host's `data-astryx-theme` attribute and `color-scheme` (§7 Theme law). There is no browser to drive and no artifact to re-emit, so the theme/mode change is purely a store mutation.
+- → `{ theme, mode }` (`mode` = the effective mode applied)
 - errs: `THEME_UNKNOWN`, `INVALID_PROP` (mode not one of light/dark/system, or gothic with an effective light mode)
-- message: `테마 {theme}·모드 {mode} 적용{previewRefreshed ? " (미리보기 갱신)" : ""}.`
+- message: `테마 {theme}·모드 {mode} 적용.`
 
 ### theme.list
 - params: `{}`
@@ -256,7 +261,7 @@ Ordering note: `page.create` sets the source once (tree root or starter tsx); `c
 
 ### page.code.set
 - params: `{ pageId: string, code: string }`
-- Behavior: replaces a **tsx page**'s `code`. Validates by compiling `code` in-process under the runner's exact sucrase config (§7) — the same transform the runner runs, so bad code is rejected at the gate. On compile failure returns `COMPILE_FAILED` with the compiler error in `data.diagnostics` (and a summary in `message`); the page is left untouched. On success sets `source = { kind:"tsx", code }` (preserving any existing `origin`). A tree page returns `INVALID_TARGET` (kind gate, §2) — there is no in-place tree→tsx conversion; seed a tsx page via `page.create kind=tsx` or `template.apply`.
+- Behavior: replaces a **tsx page**'s `code`. Validates by compiling `code` in-process under the render core's exact sucrase config (§7) — the same transform the render core runs, so bad code is rejected at the gate. On compile failure returns `COMPILE_FAILED` with the compiler error in `data.diagnostics` (and a summary in `message`); the page is left untouched. On success sets `source = { kind:"tsx", code }` (preserving any existing `origin`). A tree page returns `INVALID_TARGET` (kind gate, §2) — there is no in-place tree→tsx conversion; seed a tsx page via `page.create kind=tsx` or `template.apply`.
 - → `{ pageId, bytes }` (`bytes` = `code.length`)
 - errs: `NOT_FOUND` (page), `INVALID_TARGET` (page is a tree page), `INVALID_ARG` (blank code), `COMPILE_FAILED` (with `data.diagnostics`)
 - message: `{pageId} TSX 갱신({bytes}자).`
@@ -290,17 +295,17 @@ Ordering note: `page.create` sets the source once (tree root or starter tsx); `c
 
 ### preview.open
 - params: `{ pageId: string }`
-- Behavior: writes the preview artifact for the page (§7), then drives a browser plugin (§7 fallback order) to the artifact URL.
-- → `{ url, engine }` (`engine` = `"chromium"` | `"native"`)
-- errs: `NOT_FOUND` (page), `PREVIEW_FAILED` (write or drive), `DEP_MISSING` (no browser available)
-- message: `미리보기 열림({engine}).`
+- Behavior: selects the page as the canvas's active page (sets `store.preview.activePageId` and fires `onChange` so a mounted view re-renders it), then opens or focuses the canvas view. The open call is `inv.execute("plugin.view.open", { view: "soksak-plugin-design-astryx.canvas", placement: "content" })` (spec §5 origin-preserving; not cross-plugin, not danger — `commands` suffices). The `plugin.view.open` content outcome carries `existing`, which maps to `opened` (`false` = focused an already-open tab). Setting the active page **before** the open call means a fresh mount renders the right page immediately.
+- → `{ pageId, opened }` (`opened` = `true` when a new tab was created, `false` when an existing canvas tab was focused)
+- errs: `NOT_FOUND` (page), `PREVIEW_FAILED` (`plugin.view.open` non-ok — e.g. no active project)
+- message: `캔버스 열림(페이지 {pageId}).`
 
 ### preview.refresh
 - params: `{ pageId?: string }`
-- Behavior: re-writes the artifact for the currently-previewed page (or the given `pageId`) and navigates the browser. Fails when no preview is open.
-- → `{ url, engine }`
-- errs: `NOT_FOUND` (no open preview / page absent), `PREVIEW_FAILED`, `DEP_MISSING`
-- message: `미리보기 갱신({engine}).`
+- Behavior: selects the active canvas page (the given `pageId`, or keeps the current one) and forces a re-render by firing `store.onChange`. The view is already live-bound (every mutation re-renders, §7 Live law), so this is an **explicit** re-render nudge, not a browser navigation. It is **headless-complete**: when no view is mounted it is a successful no-op (the store's active page is still updated), never a failure — there is no "open preview" precondition anymore.
+- → `{ pageId }` (the active page after the call; `null` when the doc has no pages)
+- errs: `NOT_FOUND` (given `pageId` absent)
+- message: `캔버스 재렌더(페이지 {pageId}).`
 
 ### export.tsx
 - params: `{ pageId: string }`
@@ -342,25 +347,48 @@ A vitest test asserts set equality between `Object.keys(catalog.json)` and the m
 
 ---
 
-## 7. Preview law
+## 7. View law (in-app canvas)
 
-### Artifact
+The primary design surface is a **plugin view** (`contributes.views` id `canvas`, placement `content`) opened by a **program** (`contributes.programs` id `design-astryx`, `kind:"view"`, `view:"canvas"`). The view mounts Astryx components directly in a Shadow DOM inside the app webview and stays live-bound to the module store. There is no artifact, no `file://`, no http server, no browser plugin.
 
-A preview is a standalone document written to disk: `index.html` + `runner.js`, with the design injected inline. `index.html` contains, in order:
+### Mount law (Shadow DOM, erd precedent)
 
-1. `<style>` blocks embedding, in exactly this order: `core/src/reset.css` → `core/dist/astryx.css` → the active theme's `dist/theme.css`.
-2. `<script>window.__DESIGN__ = { theme, mode, page };</script>` (the `DesignPayload` for the page; `page` is the `RunnerPage` — `{ kind:"tree", root }` or `{ kind:"tsx", code }`; `mode` is the color mode from §9, defaulted to `system` by the command layer).
-3. `<script src="./runner.js"></script>` — a sibling `file://` script. The document never relies on `fetch()` (blocked under `file://`).
+`app.ui.registerView("canvas", provider)` binds the provider (`"ui"` permission; declared in `contributes.views` or the core rejects it, §0-3). On `provider.mount(container, ctx)`:
 
-`runner.js` is the prebuilt runner bundle (built by `scripts/build-runner.mjs`, embedded in `main.js` as a string — §11). It reads `window.__DESIGN__` and branches on `page.kind`, then wraps the mounted result in the core root `<Theme>` (which stamps `document.documentElement` — safe inside the dedicated preview document) and renders. Compile and runtime errors render as **visible error surfaces, never a blank page** (the existing `ErrorBox` / `NodeBoundary`).
+1. `container.attachShadow({ mode: "open" })` (reuse `container.shadowRoot` on remount; `replaceChildren()` to clear).
+2. Inject CSS into the shadow, in this order, as `<style>` blocks (all embedded at build, §12 — no disk read):
+   - `reset.css` (Astryx `core/src/reset.css`) — contained by the shadow boundary, so it never resets app chrome (this is the erd containment reason for the shadow).
+   - `astryx.css` (`core/dist/astryx.css`) with every `:root` rewritten to `:host` — verified drop-in: the token blocks ship as `:root, .xhash { … }` selector pairs (13 in `0.1.3`), so the rewrite yields `:host, .xhash { … }` and the tokens land on the shadow host.
+   - **all 7 theme `dist/theme.css` blocks** — each is self-scoped by `@scope ([data-astryx-theme="<name>"]) to ([data-astryx-theme])` (verified in `0.1.3`; theme tokens do NOT use `:root`), so injecting all seven is collision-free; only the block matching the host's current `data-astryx-theme` activates. Each theme file's lone `:root { color-scheme: … }` line is `:root`→`:host`-rewritten with the rest and is inert (the host's inline `color-scheme` is authoritative).
+3. A wrapper `<div>` inside the shadow carries `data-astryx-theme="<activeTheme>"` and inline `style="color-scheme:<light|dark|light dark>"` (from `mode`, §9). This wrapper is the mount host and the astryx token/theme scope root.
+4. `createRoot(wrapper)` and render the active page's React tree via the render core (below). Do **not** let the root `<Theme>` stamp `document.documentElement` — nest/wrap it so it is not the document root (a nested `<Theme>` skips the html sync, verified). The shadow host attributes (step 3) carry the theme, not `documentElement`.
 
-### Tree path
+`provider.unmount` calls `root.unmount()` (React effect cleanup chains: timers cleared, listeners removed).
 
-`page.kind === "tree"`: the runner resolves each `node.type` by name from the bundled `@astryxdesign/core` barrel and lowers the tree to React elements (unchanged from v1; §2 children/prop laws). An unknown `node.type` renders an `ErrorBox` naming it.
+### Live law
 
-### TSX path (v2)
+The view and the commands share the **same module store** (the erd pattern — one `createStore` instance imported by both `plugin-entry` command registration and the view). The view subscribes to the store's `onChange` hook (`createStore` `opts.onChange`); every mutating command (`comp.*`, `page.*`, `theme.set`, `template.apply`, `page.code.set`) fires `onChange` after it persists, and the view re-renders the **active page** (`store.preview.activePageId`, §11). No file emission, no navigation — the React tree updates in place. `preview.open` sets the active page and fires `onChange`; `preview.refresh` fires `onChange` explicitly. Multi-window consistency rides the existing `app.data.kv.watch` → `rehydrate` → `onChange` path (§11).
 
-`page.kind === "tsx"`: the runner compiles `page.code` with the **exact sucrase config from Learn Gate B** and executes it under a require-shim:
+### Toolbar law
+
+The view chrome is a toolbar above the rendering area with three control groups, **all of which are command clients** (they call the registry, so headless and UI stay one truth — the toolbar never mutates the store directly):
+
+- **Page selector** — lists the doc's pages (tree + tsx) and selects the active page (drives `preview.open`/`preview.refresh` semantics, i.e. sets `activePageId`).
+- **Theme (7) + mode (light/dark/system) selectors** — drive `theme.set` (the same command CLI/MCP use). The live re-render swaps the host `data-astryx-theme`/`color-scheme` (§9).
+- **Canvas controls** — viewport-width presets (`fill` / `1280` / `768` / `375`) and canvas background. These are **view-local** framing (`CanvasControls`, `src/types.ts`): they are NOT part of the document, NOT persisted, and per-window — they frame the render, they are not a render result. The boundary is explicit: document state (pages/theme/mode) lives in the store; framing state lives in the view instance.
+
+### Rendering core law (reused engine)
+
+The v2 TSX + tree rendering engine is **reused verbatim** as the view's rendering core, relocated to `src/render-core/` so it is importable by both the view (bundled into `main.js`) and any future runner (the module-shim inputs are identical):
+
+- `src/render-core/tsx.tsx` — the sucrase-based TSX path (moved from `runner/tsx.tsx`).
+- `src/render-core/tree.tsx` — the tree renderer (moved from `runner/render.tsx`, which owns `ErrorBox` / `NodeBoundary`).
+
+The view resolves module namespaces (React, the astryx barrel + `theme`/`theme/syntax`/`hooks`, heroicons, lucide) from its own bundle and injects them into the render core — the render core stays un-tied to astryx (the injection seam is unchanged from v2, only the injector moves from `runner/entry.tsx` to the view's `mount`).
+
+**Tree path** (`page.kind === "tree"`): resolve each `node.type` by name from the bundled `@astryxdesign/core` barrel and lower the tree to React elements (§2 children/prop laws). An unknown `node.type` renders an `ErrorBox` naming it.
+
+**TSX path** (`page.kind === "tsx"`): compile `page.code` with the **exact sucrase config from Learn Gate B** and execute it under a require-shim:
 
 ```
 sucrase.transform(code, {
@@ -380,70 +408,72 @@ sucrase.transform(code, {
   - `@heroicons/react/24/outline`, `@heroicons/react/24/solid`, `@heroicons/react/20/solid` → bundled heroicons.
   - `lucide-react` → bundled lucide.
   - Any **unknown module** (e.g. `recharts`, `@astryxdesign/lab`, or a raw-runtime `@stylexjs/stylex`) → an honest-unavailable stub whose components render a visible `ErrorBox` naming the module. The gate keeps such templates out (§13), but a hand-written `page.code.set` referencing one must degrade to a visible surface, never a throw.
-- The runner mounts the module's **default export** (compile-based resolution, per Gate: exactly one real `export default function` per template — text-scan dual-default hits are inside template-literal code samples, so a regex must never be used to find the default).
+- The render core mounts the module's **default export** (compile-based resolution, per Gate: exactly one real `export default function` per template — text-scan dual-default hits are inside template-literal code samples, so a regex must never be used to find the default).
 - Deferred `setTimeout` timers (chat/login demos) and a single failing `fetch` (one code-sample block, offline) must be tolerated: they fire post-mount and must not crash the page.
 
-### Asset placeholder law (v2)
+Compile and runtime errors render as **visible error surfaces, never a blank page** (`ErrorBox` / `NodeBoundary`).
 
-At render time the runner rewrites image sources that are **relative or absolute paths with no URL scheme** (`./x`, `../x`, `/x`) to an **inline neutral SVG placeholder** `data:` URI — an honest placeholder for an asset the preview cannot resolve under `file://`. Sources with a scheme (`http:`, `https:`, `data:`) pass through untouched (the corpus references only remote absolute images; a network-blocked remote image shows the browser's broken-image glyph, never a throw). Every `<img>` also carries an `onerror` fallback to the same placeholder. This is documented honest degradation, not silent breakage.
+### Asset placeholder law
 
-### Size law (v2)
+At render time the render core rewrites image sources that are **relative or absolute paths with no URL scheme** (`./x`, `../x`, `/x`) to an **inline neutral SVG placeholder** `data:` URI — an honest placeholder for an unresolvable asset. Sources with a scheme (`http:`, `https:`, `data:`) pass through untouched; the app webview loads remote absolute images normally (unlike the old `file://` origin, the in-app document has the app's normal origin, so `network`-class loads are not origin-blocked — but this plugin declares no `network` permission and the corpus needs none at mount). Every `<img>` also carries an `onerror` fallback to the same placeholder. Documented honest degradation, not silent breakage.
 
-The runner bundle reports its byte size (build log / `generated/` artifact). v2 adds `sucrase`, heroicons (`24/outline`, `24/solid`, `20/solid`), and `lucide-react` to the bundle on top of the v1 `react` + `react-dom` + `@astryxdesign/core` payload. That growth is **accepted and stated** — it is the cost of lossless TSX rendering (the v1 runner baseline was ~0.94 MB; the v2 bundle is larger and its size is recorded, never hidden).
+### Anchor polyfill law (in-app policy, pinned)
 
-### Storage API (pinned)
+Astryx popover/tooltip/menu surfaces use CSS anchor positioning. The view runs the anchor-positioning polyfill **once per app document** (a module-level idempotent guard, NOT per-mount), and only when `!CSS.supports("anchor-name", "--x")` — when the app webview supports anchor positioning natively the polyfill never runs (zero cost). The polyfill reads inline `<style>` via `innerHTML` (no `fetch`), so it works fully in-app (the `file://`-origin breakage that forced a dev server in the original astryx does not apply). The polyfill is document-wide by design, but it is **INERT for core**: core chrome uses zero anchor-positioned elements (no `anchor-name` / `position-anchor` in core CSS), so a document-wide pass finds nothing to restyle outside astryx surfaces. Honest caveat: a document-wide light-DOM polyfill does not reach into the astryx shadow root's own elements; when the app webview lacks native support, anchored astryx surfaces inside the shadow may position imperfectly — this is a stated limitation, not a crash, and current app-webview versions support anchor positioning natively so the gate skips the polyfill in practice.
 
-Artifacts are written with `app.fs.writeText(absPath, content)`. TRANSPORT IS HTTP — the plugin owns a local static server (`scripts/preview-server.cjs`, node built-ins only, bound to 127.0.0.1, root-jailed to `.preview/`), spawned via `app.process` ("process" permission) through a login shell (`/bin/sh -lc "exec node …"` — GUI apps do not inherit shell PATH). The server prints `PORT=<n>`; the preview URL is `http://127.0.0.1:<port>/<pageId>.html`. The server is reused while alive, respawned on death, and killed on plugin deactivate. `file://` transport is FORBIDDEN — it treats every document as a unique security origin, which broke fetch-dependent code (the anchor polyfill, astryx image hooks) and is why the original astryx operates behind a dev server. `app.fs.url` is equally forbidden: its blob URL is scoped to the app-webview document and no external engine can resolve it. Preview artifacts live FLAT in the single `${ctx.dir}/.preview/` directory (`${pageId}.html` + one shared `runner.js`) — core `writeText` never creates parent directories, so per-page subdirectories are forbidden; the tracked `.preview/.gitkeep` guarantees the directory exists. `ctx.dir` is the plugin install directory (`PluginContext.dir`). `.preview/` contents are git-ignored (except `.gitkeep`). `writeText` requires `fs:write`; the preview server requires `process`.
+### Toast law (pinned)
 
-### Cross-plugin invocation (pinned)
+Astryx `Toast` portals to `document.body`, escaping the shadow root where `astryx.css` lives, so a portaled toast renders **unstyled**. Policy: if astryx exposes a portal-target prop/context, the view SHOULD point it at a shadow-internal container so toasts inherit the injected CSS; absent that hook, the accepted honest degradation is that toasts render unstyled in `document.body`. Toasts are rare in v3 (the tree path is non-interactive — callbacks are stripped, §2 — and only tsx demo `setTimeout` blocks fire them), so this is a documented cosmetic limitation, not a functional gap.
 
-The plugin drives a browser plugin by executing the browser plugin's registry commands. Inside a handler, use the injected `inv.execute(name, params?)` (from the `PluginInvocation` context) — never `app.commands.execute` — so origin/correlation inherit (spec §5). The command name is `plugin.<targetId>.<cmd>`. Authorization requires (a) the `commands` permission and (b) `<targetId>` declared in `manifest.dependencies` (call-boundary enforcement). Both browser plugins are declared (§8), and their `open`/`navigate`/`ping` are non-destructive, so `commands` suffices.
+### Theme model (all 7 embedded, host-attr swap)
 
-### Browser drive + fallback order (pinned)
+See §9 — v3 embeds all 7 theme blocks in the shadow and switches by swapping the host `data-astryx-theme` attribute + `color-scheme`; there is no re-emit and no navigation (those were `file://`/browser artifacts).
 
-Preferred engine is Chromium (`soksak-plugin-browser-chromium`); fallback is native (`soksak-plugin-browser-native`). Availability is probed with the universal `ping` command (registered when the plugin is enabled):
+### Bundle size law
 
-1. `inv.execute("plugin.soksak-plugin-browser-chromium.ping")` → `ok` ⇒ engine = chromium.
-2. else `inv.execute("plugin.soksak-plugin-browser-native.ping")` → `ok` ⇒ engine = native.
-3. else return `err("DEP_MISSING", …)`.
+The render core's payload (`react` + `react-dom/client` + `@astryxdesign/core` + `sucrase` + heroicons + `lucide-react`) now bundles **directly into `main.js`** as part of the view's module graph, instead of being embedded as the `__RUNNER_JS__` string (the prebuilt `runner.js`, ~1 MB+ in v2). Net `main.js` byte size stays the **same order of magnitude** — the delta is a wash: the same libraries move out of an embedded string and into `main.js`'s import graph. `__ASTRYX_CSS__` and `__THEME_CSS_MAP__` (7 themes) remain embedded (they are injected into the shadow, §12). The `generated/runner.js` artifact and its `build:runner` embed are dropped (§12).
 
-Then:
+### Legacy-removal law (pivot record, git remembers)
 
-- Open: `inv.execute("plugin.<engineId>.open", { url })` where `url` is the `app.fs.url(indexPath)` value.
-- Refresh / navigate: `inv.execute("plugin.<engineId>.navigate", { url })` (same url; the file bytes changed, so the browser reloads the new content).
+The v2 browser-preview transport is **DELETED, not deprecated** — the owner's verdict (primary surface = in-app panel program, not a browser document) and the erd precedent (React-in-`attachShadow` for CSS containment) supersede it. Every removed artifact:
 
-A non-`ok` outcome from `open`/`navigate` maps to `PREVIEW_FAILED`. The chosen engine is recorded in the store so `preview.refresh` and `theme.set` reuse it.
+- `scripts/preview-server.cjs` — the local http static server.
+- `src/preview/server.ts` (+ `server.test.ts`) — the server-lifecycle module.
+- `src/preview/emit.ts` / `write.ts` (+ tests) — the `index.html`/`runner.js` disk-emission path (`app.fs.writeText`).
+- `src/commands/preview-drive.ts` (+ `preview-drive.test.ts`) — browser probe (`ping`) + drive (`open`/`navigate`) + Chromium→native fallback.
+- `runner/entry.tsx` — the standalone `file://` runner app (its namespace-injection role moves into the view's `mount`). `scripts/build-runner.mjs`'s `runner.js` output is dropped.
+- `file://` transport law, `app.fs.url` law, the `${ctx.dir}/.preview/` directory + `.preview/.gitkeep`.
+- Manifest: the `soksak-plugin-browser-chromium` / `soksak-plugin-browser-native` `dependencies`, and the `process` + `fs:write` permissions.
+- Error code `DEP_MISSING`; the `engine`/`url` return fields; the `PreviewSession` `engine`/`url`/`server` store fields (§11).
 
-`open` param shape: `{ url?: string }`. `navigate` param shape: `{ url: string }`. `ping` param shape: `{}`. (Verified from the shipped browser bundles.)
+No dead code and no commented-out transport remain — git is the history.
 
 ---
 
 ## 8. Dependencies law
 
-`plugin.json` `dependencies` (plugin↔plugin, pinned):
+`plugin.json` has **no** `dependencies`, no `libraries`, no `sidecars`. The canvas renders in-app (Astryx components mounted in the app webview's Shadow DOM, §7), so there is no browser plugin to call and no cross-plugin dependency to declare. The v2 `soksak-plugin-browser-chromium` / `soksak-plugin-browser-native` dependencies are removed (§7 Legacy-removal law).
 
-```
-"dependencies": {
-  "soksak-plugin-browser-chromium": "^0.1.0",
-  "soksak-plugin-browser-native": "^2.0.0"
-}
-```
+Permissions (`plugin.json` `permissions`): `["ui", "commands", "data", "programs"]`.
 
-Both are required so either browser command is callable (the call boundary denies undeclared cross-plugin calls). Installing this plugin cascades installation of both browsers. Enablement stays per-plugin and user-consented; `DEP_MISSING` occurs only when neither browser is enabled at drive time (both `ping` fail).
+- `ui` — register the `canvas` view (`app.ui.registerView`).
+- `commands` — register this plugin's commands and execute `plugin.view.open` (not cross-plugin, not danger; §7).
+- `data` — persist the `DesignDoc` to `app.data.kv` (§11).
+- `programs` — contribute the `design-astryx` program (the `+` menu entry that opens the canvas).
 
-No `libraries` and no `sidecars` entries: the preview reaches the Chromium engine indirectly through the browser plugin's own sidecar declaration, not this plugin's.
+Removed vs v2: `process` (no http server) and `fs:write` (no disk artifact — `export.tsx` returns TSX as data, it does not write).
 
 ---
 
-## 9. Theme law (decided: re-emit)
+## 9. Theme law (decided: all 7 embedded, host-attr swap)
 
-The preview embeds **only the active theme's** `dist/theme.css`. `theme.set` changes `activeTheme` and, when a preview is open, re-emits `index.html` with the new theme block and navigates. Re-emit is chosen over embedding all seven and toggling a `data-astryx-theme` attribute, because the shipped `theme.css` files target `:root` (not a per-theme scoped selector), so concatenating all seven would collide on `:root` variables (last wins). Re-emitting one theme is both correct and smaller. The seven theme CSS payloads are still all embedded in `main.js` (a build-time map, §11) so re-emit needs no disk read.
+The shadow embeds **all 7** theme `dist/theme.css` blocks (§7 Mount law), not just the active one. Switching theme swaps the shadow-host wrapper's `data-astryx-theme` attribute; only the matching block activates. This is correct and collision-free because the shipped `theme.css` files are `@scope ([data-astryx-theme="<name>"]) to ([data-astryx-theme])`-gated — their tokens do **not** target `:root` (verified in `0.1.3`), so concatenating all seven does not collide. (The v2 re-emit law — embed only the active theme and re-write the `file://` document on `theme.set` — was a workaround for the single-`:root` document origin; it is removed with the browser transport.) The 7 theme CSS payloads are embedded in `main.js` as `__THEME_CSS_MAP__` (§12), so no disk read.
 
-`ThemeName` and the fixed 7-theme set live in `src/types.ts` (`THEMES`). `theme.set` rejects any name outside it with `THEME_UNKNOWN`.
+`theme.set` mutates `activeTheme`/`mode` in the store and fires `onChange`; the mounted view swaps the host attribute + `color-scheme` in place (no re-emit, no navigation, §7 Live law). `ThemeName` and the fixed 7-theme set live in `src/types.ts` (`THEMES`). `theme.set` rejects any name outside it with `THEME_UNKNOWN`.
 
 ### Color mode (decided)
 
-`DesignDoc.mode` (`ColorMode` = `light` | `dark` | `system`) rides through the store into `DesignPayload.mode` and on to the runner, which resolves it (the Astryx theme CSS uses `light-dark()`; `system` follows the OS). `theme.set` threads it (§5). Mode is a document-level property (like `activeTheme`), persisted (§11); it is optional on `DesignDoc`/`DesignPayload` and read as `system` when absent, so pre-mode docs need no migration.
+`DesignDoc.mode` (`ColorMode` = `light` | `dark` | `system`) rides through the store into the view's render, which applies it as the shadow-host wrapper's inline `color-scheme` (`light` → `"light"`, `dark` → `"dark"`, `system` → `"light dark"`). Astryx theme tokens use `light-dark()`, which resolves against the host's `color-scheme` (`system` follows the OS). `theme.set` threads it (§5). Mode is a document-level property (like `activeTheme`), persisted (§11); it is optional on `DesignDoc`/`DesignPayload` and read as `system` when absent, so pre-mode docs need no migration.
 
 `gothic` is dark-only (it ships only dark token values). `theme.set` rejects an effective `light` mode for `gothic` with `INVALID_PROP` **before** mutating, so the doc never lands in an unrenderable theme/mode pair. The gothic gate lives in the command layer (`src/commands/theme-mode.ts`, a pure resolver); theme name validation stays in the model layer (`setTheme`). `system` is always allowed for `gothic` (it renders dark).
 
@@ -479,9 +509,9 @@ One in-memory store holds the working `DesignDoc` (the erd pattern: a single sou
 - kv key: `doc:${projectId}` where `projectId = app.project.current()?.id ?? "_global"`.
 - On activate: the store hydrates from `app.data.kv.get(key)`; absent ⇒ a fresh empty doc (`{ version:1, activeTheme:"neutral", mode:"system", pages:[], seq:0 }`). `coerceDoc` defaults a missing/invalid `mode` to `system`, and coerces each page's source: a v1 root-only page (`{ id, name, root }`) becomes `{ id, name, source:{ kind:"tree", root } }`; a page with a missing/malformed `source` becomes an empty tree page (§2). No migration file — the coercion is a hydrate-time rule and `version` stays `1`.
 - On every mutation: the store writes back with `app.data.kv.set(key, doc)`.
-- `app.data.kv.watch` keeps multiple windows of the same project consistent (re-hydrate on external change).
+- `app.data.kv.watch` keeps multiple windows of the same project consistent (re-hydrate on external change → `onChange` → live view re-render, §7).
 
-Commands are headless-complete: they never require a view. The preview engine choice and the last-previewed `pageId`/`url` live in the store (not persisted — session state).
+Commands are headless-complete: they never require a view. The **active canvas page** (`preview.activePageId` — the page the mounted view renders, §7 Live law) is the sole session field; it is NOT persisted. The v2 session fields `engine`/`url`/`server` are removed (there is no browser engine, artifact url, or http server). `CanvasControls` (viewport width, background) is view-local, not stored (§7 Toolbar law).
 
 ---
 
@@ -491,13 +521,14 @@ Commands are headless-complete: they never require a view. The preview engine ch
 
 - `__CATALOG_JSON__` ← `generated/catalog.json`
 - `__TEMPLATES_JSON__` ← `generated/templates.json` (verbatim-TSX `TemplateEntry[]`, §13)
-- `__RUNNER_JS__` ← `generated/runner.js` (the prebuilt runner bundle — v2 embeds sucrase + heroicons + lucide, §7)
-- `__ASTRYX_CSS__` ← `generated/astryx.css` (reset.css + dist/astryx.css concatenated)
-- `__THEME_CSS_MAP__` ← `generated/theme-css.json` (`{ "<theme>": "<theme.css>" }`, 7 entries)
+- `__ASTRYX_CSS__` ← `generated/astryx.css` (reset.css + dist/astryx.css concatenated; the view injects it into the shadow with `:root`→`:host` rewrite, §7)
+- `__THEME_CSS_MAP__` ← `generated/theme-css.json` (`{ "<theme>": "<theme.css>" }`, 7 entries — all injected into the shadow, §9)
 
-`build.mjs` throws when any generated file is missing (no silent partial output). The pipeline order is fixed by `package.json`: `gen` (catalog + templates) → `build:runner` (runner.js, astryx.css, theme-css.json) → `build.mjs` (main.js). `.gitignore` adds `.preview/*` (with `.gitkeep` tracked) and `generated/`; `main.js` is committed.
+The render core (`src/render-core/`, §7) is NOT an embedded string — it is part of `main.js`'s import graph (the view imports it, and it pulls in `react` + `react-dom/client` + `@astryxdesign/core` + `sucrase` + heroicons + `lucide-react`). The v2 `__RUNNER_JS__` define and the `generated/runner.js` embed are **removed** (§7 Bundle size law).
 
-`build.mjs` is owned by the contract; `scripts/gen-catalog.mjs`, `scripts/gen-templates.mjs`, `scripts/build-runner.mjs`, `src/plugin-entry.ts`, `runner/`, and `skill/SKILL.md` are built by implementers to this contract.
+`build.mjs` throws when any generated file is missing (no silent partial output). The pipeline order is fixed by `package.json`: `gen` (catalog + templates) → `build:css` (astryx.css + theme-css.json) → `build.mjs` (main.js). The v2 `build:runner` step's `runner.js` output is dropped; it emits only the CSS artifacts (rename to `build:css`). `.gitignore` keeps `generated/`; the `.preview/*` + `.preview/.gitkeep` entries are removed (no artifact directory). `main.js` is committed.
+
+`build.mjs` is owned by the contract; `scripts/gen-catalog.mjs`, `scripts/gen-templates.mjs`, the CSS build step, `src/plugin-entry.ts`, `src/render-core/`, the view provider, and `skill/SKILL.md` are built by implementers to this contract.
 
 ---
 
@@ -520,7 +551,7 @@ Each `TemplateEntry` packages the **original TSX source verbatim**:
 - `id` = the source-relative slug (`pages/dashboard`, `blocks/components/hero-split`). `kind` = `page` for `pages/*`, `block` otherwise. `name` = a human display name derived from the slug.
 - `code` = the file's TSX bytes, unmodified.
 - `requires` = the set of module ids the file imports (`react`, `@astryxdesign/core`, `@heroicons/react/24/outline`, `lucide-react`, …).
-- `available` = whether the runner can render it: `true` when every `requires` entry resolves in the runner's require-shim (§7). `false` when the file needs a module the bundle does not carry, or a **compile-time-only** transform the runner does not run.
+- `available` = whether the render core can render it: `true` when every `requires` entry resolves in the render core's require-shim (§7). `false` when the file needs a module the bundle does not carry, or a **compile-time-only** transform the render core does not run.
 - `reason` (only on `available: false`) = a machine-readable cause.
 
 ### Mechanical completeness (required)
@@ -542,7 +573,7 @@ Of 619 templates, **605 are available** and **14 are unavailable** (7 module-blo
 
 ### Export shape (mount law, cited)
 
-612/619 files expose exactly one genuine top-level `export default function` (a React component); the runner mounts `module.default`. Two files (`pages/ide`, `pages/documentation-technical`) contain extra `export default` text **inside template-literal code samples** — esbuild/sucrase compile exactly one real default for each, so default resolution MUST be compile-based, never a regex text scan. 7 files carry no default (`themes/*/icons.tsx`, named-only icon helpers consumed by `pages/theme-showcase`) — helper modules, not standalone mountable pages; they enter `templates.json` as `available:false` with reason `helper module (no default export to mount)`.
+612/619 files expose exactly one genuine top-level `export default function` (a React component); the render core mounts `module.default`. Two files (`pages/ide`, `pages/documentation-technical`) contain extra `export default` text **inside template-literal code samples** — esbuild/sucrase compile exactly one real default for each, so default resolution MUST be compile-based, never a regex text scan. 7 files carry no default (`themes/*/icons.tsx`, named-only icon helpers consumed by `pages/theme-showcase`) — helper modules, not standalone mountable pages; they enter `templates.json` as `available:false` with reason `helper module (no default export to mount)`.
 
 ### `template.list` and `template.apply`
 
@@ -590,10 +621,10 @@ The v2 laws rest on a mechanical census of the 619-template corpus (trusted, cit
 - **Shim** — barrel forwarding for capitalized subpaths + three explicit lowercase namespaces (`theme`, `theme/syntax`, `hooks`). The Gate A "barrel-only" verdict missed lowercase subpaths; the full-corpus adversarial run corrected it.
 - **Exports** — 612/619 have exactly one real `export default function`; the 2 apparent dual-defaults are template-literal code samples (compile-based resolution required). 7 no-default files are icon helpers.
 - **Assets** — no local/bundled asset dependency; every image is a remote absolute URL (Meta CDN + a few favicons). `next/image`=0, relative/local `img src`=0, imported image modules=0. The placeholder law (§7) covers scheme-less paths defensively.
-- **Runtime** — `import()`=0, `requestAnimationFrame`=0, `setInterval`=0, `localStorage`=0; `setTimeout` in 10 files (post-mount demo timers), one real `fetch` (offline-rejecting code-sample block). The preview needs no loader and no polyfill beyond a real DOM.
+- **Runtime** — `import()`=0, `requestAnimationFrame`=0, `setInterval`=0, `localStorage`=0; `setTimeout` in 10 files (post-mount demo timers), one real `fetch` (offline-rejecting code-sample block). The canvas needs no loader; the anchor-positioning polyfill runs only when the app webview lacks native support and is gated + inert for core (§7 Anchor polyfill law).
 
 ---
 
-Version: 2.0.0
+Version: 3.0.0
 Spec: soksak-plugin-spec@1
 Core: @astryxdesign/core 0.1.3

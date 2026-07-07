@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "gen": "node scripts/gen-catalog.mjs && node scripts/gen-templates.mjs && node scripts/gen-docs.mjs",
-    "build:runner": "node scripts/build-runner.mjs",
-    "build": "npm run gen && npm run build:runner && node build.mjs",
+    "build:css": "node scripts/build-css.mjs",
+    "build": "npm run gen && npm run build:css && node build.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

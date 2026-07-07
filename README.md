@@ -2,12 +2,12 @@
 
 Design by talking, for the soksak terminal app.
 
-The design document is a component tree of Astryx components (`@astryxdesign/core`). Every capability is a command, so you build a page, set a theme, preview it in a browser view, and export TSX with no GUI — over the `sok` CLI, as MCP tools, or the e2e socket. The plugin holds one working document per project (the single source of truth), persisted to `app.data`; a browser view, when open, only renders it. External LLMs drive it through the bundled skill (`contributes.skill`).
+The design document is a set of Astryx pages (`@astryxdesign/core`) — each a component tree or original TSX. Every capability is a command, so you build a page, set a theme, preview it in an in-app canvas view, and export TSX with no GUI — over the `sok` CLI, as MCP tools, or the e2e socket. The plugin holds one working document per project (the single source of truth), persisted to `app.data`; the canvas view, when open, mounts the Astryx components live and re-renders on every command. External LLMs drive it through the bundled skill (`contributes.skill`).
 
 ## What it is
 
 - **Two page kinds.** A page is either a **tree** — an Astryx component tree (`{ id, type, props, children }`) edited a node at a time by `comp.*` — or **tsx** — original `'use client'` TSX source where the source is the truth, seeded from a shipped template or `page.create kind=tsx` and edited whole by `page.code.set`. Rich pages start as tsx; command-composed pages are trees.
-- **Full scope.** Every renderable component export of `@astryxdesign/core` `0.1.3` (no whitelist) for tree pages, all 7 packaged themes, all 619 shipped Astryx CLI templates as verbatim tsx (612 available, 7 unavailable with honest reasons), and TSX export for both kinds.
+- **Full scope.** Every renderable component export of `@astryxdesign/core` `0.1.3` (no whitelist) for tree pages, all 7 packaged themes, all 619 shipped Astryx CLI templates as verbatim tsx (605 available, 14 unavailable with honest reasons), and TSX export for both kinds.
 - **Headless-complete.** Create pages, add/set/move/find components, apply templates, edit TSX, set the theme, preview, and export entirely by command. The document is the single source of truth; views only reflect it.
 - **Theme-driven.** The theme is document-level. Components read color, spacing, radius, and typography from the active theme's tokens; a design should hold across all 7 themes rather than fight them with inline styles.
 
@@ -34,23 +34,31 @@ All commands take one JSON params object and return the v1 message envelope `{ o
 | `comp.remove` | `{ pageId, nodeId }` | Removes a node and its subtree (not the root). Tree pages only. |
 | `comp.get` | `{ pageId, nodeId }` | Returns the full subtree. Tree pages only. |
 | `comp.find` | `{ pageId?, type?, propContains? }` | Searches for matching nodes. Tree pages only. |
-| `theme.set` | `{ theme, mode? }` | Sets `activeTheme` and light/dark `mode`; re-emits an open preview. |
+| `theme.set` | `{ theme, mode? }` | Sets `activeTheme` and light/dark/system `mode`; the mounted canvas re-renders live. |
 | `theme.list` | `{}` | `{ themes, active }` — the 7 themes. |
 | `template.list` | `{ kind?, includeUnavailable? }` | Available templates + counts/reasons of the unavailable. |
 | `template.apply` | `{ id, pageId?, name? }` | Creates a tsx page from a template's verbatim code. |
 | `catalog.list` | `{ group?, query? }` | Lists catalog components. |
 | `catalog.doc` | `{ type }` | Full catalog entry: props, enums, defaults, `acceptsChildren`. |
-| `preview.open` | `{ pageId }` | Writes the preview artifact and opens a browser view. |
-| `preview.refresh` | `{ pageId? }` | Re-emits and reloads the current preview. |
+| `preview.open` | `{ pageId }` | Selects the page and opens/focuses the in-app canvas view. |
+| `preview.refresh` | `{ pageId? }` | Forces an explicit canvas re-render (no-op when no view is open). |
 | `export.tsx` | `{ pageId }` | TSX for the page (a tsx page's `code` verbatim, or the tree serializer). |
 
-Error `code` is a closed set: `NOT_FOUND`, `INVALID_TYPE`, `INVALID_PROP`, `INVALID_TARGET`, `INVALID_ARG`, `DUPLICATE`, `TEMPLATE_UNKNOWN`, `TEMPLATE_UNAVAILABLE`, `THEME_UNKNOWN`, `COMPILE_FAILED`, `PREVIEW_FAILED`, `DEP_MISSING`, `EXPORT_FAILED`.
+Error `code` is a closed set: `NOT_FOUND`, `INVALID_TYPE`, `INVALID_PROP`, `INVALID_TARGET`, `INVALID_ARG`, `DUPLICATE`, `TEMPLATE_UNKNOWN`, `TEMPLATE_UNAVAILABLE`, `THEME_UNKNOWN`, `COMPILE_FAILED`, `PREVIEW_FAILED`, `EXPORT_FAILED`.
 
-## Preview architecture
+## Canvas architecture
 
-`preview.open` writes a self-contained document to the flat `.preview/` directory under the plugin install directory: `<pageId>.html` + a shared `runner.js`, with the design injected inline as `window.__DESIGN__ = { theme, mode, page }`. `index.html` embeds CSS in order (`reset.css` → `astryx.css` → the active theme's `theme.css`), then the injected design, then the sibling `runner.js` (a prebuilt bundle). The runner branches on `page.kind`: a **tree** page resolves each `node.type` from the `@astryxdesign/core` barrel and renders the tree; a **tsx** page is compiled with sucrase and mounted through a require-shim that resolves `react`, the `@astryxdesign/core` barrel, heroicons, and lucide from the bundle — its default export is mounted losslessly. Both wrap in the core `<Theme>`; compile/runtime errors render as visible error surfaces, never blank. The document is loaded via `file://` and never uses `fetch()`.
+The primary design surface is an in-app **canvas view** (a plugin view, id `canvas`, opened by the `design-astryx` program from the `+` menu), not a browser document. `preview.open` opens or focuses the canvas tab; there is no http server, no `file://` artifact, and no browser dependency.
 
-The plugin then drives a browser dependency plugin to the artifact URL: `soksak-plugin-browser-chromium` is preferred, `soksak-plugin-browser-native` is the fallback, probed via each plugin's `ping`. `preview.refresh` and a theme change re-emit the artifact and reload the same URL. Both browser plugins are declared in `plugin.json` `dependencies`, so installing this plugin cascades their installation; `DEP_MISSING` occurs only when neither is enabled at drive time.
+The view mounts the active page's Astryx components **directly** as a React tree inside a Shadow DOM in the app webview, live-bound to the same module store the commands mutate — so every command (`comp.*`, `page.*`, `theme.set`, `template.apply`, `page.code.set`) re-renders the active page instantly, with no navigation and no disk emission. The Shadow DOM contains a global CSS reset (the erd precedent): the view injects `reset.css` → `astryx.css` (with `:root` rewritten to `:host`) → all 7 theme blocks into the shadow, and carries the active theme on the shadow-host wrapper via `data-astryx-theme` + `color-scheme`; switching theme or mode swaps those attributes in place.
+
+The view chrome is a toolbar above the rendering area, whose controls are all command clients (headless and UI stay one truth):
+
+- **Page selector** — lists the doc's pages and selects the active one.
+- **Theme (7) + mode (light/dark/system) selectors** — drive `theme.set`.
+- **Canvas controls** — viewport-width presets (`fill` / `1280` / `768` / `375`) and canvas background. These are view-local framing: not part of the document, not persisted, and per-window.
+
+The rendering core (reused from the earlier transport) branches on `page.kind`: a **tree** page resolves each `node.type` from the `@astryxdesign/core` barrel and renders the tree; a **tsx** page is compiled with sucrase and mounted through a require-shim that resolves `react`, the `@astryxdesign/core` barrel, heroicons, and lucide from the bundle — its default export is mounted losslessly. Compile and runtime errors render as visible error surfaces, never a blank page.
 
 ## Usage
 
@@ -69,8 +77,8 @@ sok plugin.soksak-plugin-design-astryx.page.create name='Landing'
 sok plugin.soksak-plugin-design-astryx.comp.add pageId=<p> type=Card
 sok plugin.soksak-plugin-design-astryx.comp.add pageId=<p> parentId=<cardId> type=Button \
   props='{"label":"Get started","variant":"primary"}'
-sok plugin.soksak-plugin-design-astryx.preview.open pageId=<p>
-sok window.snapshot            # capture the browser view and read the pixels
+sok plugin.soksak-plugin-design-astryx.preview.open pageId=<p>   # open the in-app canvas view
+sok window.snapshot            # capture the app window and read the pixels
 sok plugin.soksak-plugin-design-astryx.export.tsx pageId=<p>
 ```
 
@@ -81,10 +89,10 @@ The bundled `soksak-design-astryx` skill (`contributes.skill`) carries the full 
 ```
 npm install
 npm test
-npm run build   # gen catalog + templates → build runner → bundle main.js (esbuild)
+npm run build   # gen catalog + templates → build CSS → bundle main.js (esbuild)
 ```
 
-`npm run build` runs, in order, `scripts/gen-catalog.mjs` and `scripts/gen-templates.mjs` (generate `generated/catalog.json` and `generated/templates.json` from `@astryxdesign/core` and `@astryxdesign/cli`), `scripts/build-runner.mjs` (the runner bundle and embedded CSS), then `build.mjs` (bundle `src` → committed `main.js`). `.preview/` and `generated/` are git-ignored; `main.js` is committed.
+`npm run build` runs, in order, `scripts/gen-catalog.mjs` and `scripts/gen-templates.mjs` (generate `generated/catalog.json` and `generated/templates.json` from `@astryxdesign/core` and `@astryxdesign/cli`), the `build:css` step (`generated/astryx.css` + the 7-theme `generated/theme-css.json`, injected into the canvas shadow), then `build.mjs` (bundle `src` → committed `main.js`; the render core and its libraries are part of `main.js`'s import graph). `generated/` is git-ignored; `main.js` is committed.
 
 ## License
 

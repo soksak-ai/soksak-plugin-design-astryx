@@ -1,12 +1,16 @@
 // 인메모리 스토어 — 작업 중 DesignDoc 단일 진실(erd 선례: 모든 명령이 같은 소스 공유). 영속은
-// app.data.kv(권한 "data", ns 는 코어가 플러그인 id 로 강제). 세션 상태(미리보기 엔진·마지막 페이지)는
-// 스토어에만 두고 영속하지 않는다(CONTRACT §11). 문서 수준 강제(version/theme/mode/seq/pages 배열)는
-// 여기가 소유하고, 페이지 소스 강제(v1→v2 승격·훼손 폴백)는 PageSource 소유자(model.coercePage)에
-// 위임한다 — 강제 규칙 단일 진실(§2·§11, 인라인 재정의 금지).
-import { freshServerState, type PreviewServerState } from "../preview/server";
+// app.data.kv(권한 "data", ns 는 코어가 플러그인 id 로 강제). 세션 상태(활성 캔버스 페이지)는 스토어에만
+// 두고 영속하지 않는다(CONTRACT §11). 문서 수준 강제(version/theme/mode/seq/pages 배열)는 여기가
+// 소유하고, 페이지 소스 강제(v1→v2 승격·훼손 폴백)는 PageSource 소유자(model.coercePage)에 위임한다 —
+// 강제 규칙 단일 진실(§2·§11, 인라인 재정의 금지).
+//
+// 라이브 바인딩(§7 Live law): 뷰와 명령이 같은 스토어를 공유한다. 뷰는 subscribe 로 재렌더 콜백을 걸고,
+// 변이 명령은 persist 후 notify 로, preview.open/refresh 는 activePageId 변경 후 notify 로 재렌더를 부른다.
 import {
   type DesignDoc,
   type DesignPage,
+  type DesignPayload,
+  type RunnerPage,
   type ThemeName,
   type ColorMode,
   THEMES,
@@ -14,14 +18,10 @@ import {
 } from "../types";
 import { coercePage } from "../model";
 
-export type Engine = "chromium" | "native";
-
-// 미리보기 세션 상태 — 영속 대상 아님. 선택된 엔진과 마지막 미리보기 페이지/URL.
+// 미리보기 세션 상태 — 영속 대상 아님. 마운트된 캔버스 뷰가 렌더하는 활성 페이지 id(§11). v2 의
+// engine/url/server 필드는 제거됐다 — 브라우저 엔진·아티팩트 url·http 서버가 없다(§7 Legacy-removal law).
 export interface PreviewSession {
-  engine: Engine | null;
-  pageId: string | null;
-  url: string | null;
-  server: PreviewServerState; // 플러그인 소유 http 정적 서버(§7 수송) — 세션 상태, 영속 안 함.
+  activePageId: string | null;
 }
 
 // 코어 app.data.kv 의 최소 표면(스토어가 실제 쓰는 것만). 전체는 src/plugins/api.ts.
@@ -33,10 +33,12 @@ export interface DataKv {
 
 export interface DesignStore {
   doc: DesignDoc; // 작업 문서(모델이 제자리 변이, watch 재수화 시 교체). 핸들러는 호출 시점에 참조.
-  dir: string; // 플러그인 설치 디렉토리(미리보기 아티팩트 기록 루트) = PluginContext.dir.
-  preview: PreviewSession;
-  persist(): Promise<void>; // 변이 후 doc 를 kv 에 기록(멱등).
-  hydrate(): Promise<void>; // kv 에서 doc 복원(활성화 직후 1회, 비동기 — 등록은 즉시).
+  dir: string; // 플러그인 설치 디렉토리(= PluginContext.dir). v3 는 디스크 아티팩트가 없어 렌더에 미사용 — 향후 확장 여지.
+  preview: PreviewSession; // 세션 상태(활성 캔버스 페이지) — 영속 안 함.
+  persist(): Promise<void>; // 변이 후 doc 를 kv 에 기록(멱등) + notify(라이브 재렌더).
+  hydrate(): Promise<void>; // kv 에서 doc 복원(활성화 직후 1회, 비동기 — 등록은 즉시) + notify.
+  subscribe(cb: () => void): () => void; // 뷰가 재렌더 콜백을 건다(§7 Live law). 해제 함수 반환.
+  notify(): void; // 구독자 전원에 변경 통지 — preview.open/refresh 가 activePageId 변경 후 직접 부른다.
   dispose(): void; // watch 구독 해제.
 }
 
@@ -80,6 +82,20 @@ export function coerceDoc(raw: unknown): DesignDoc {
   return { version: 1, activeTheme, mode, pages, seq };
 }
 
+// 활성 캔버스 페이지 → 렌더 코어 페이로드(§7). 소스 종류 투영(tree/tsx)의 단일 진실 — 뷰가 매 렌더에
+// 이걸 호출해 마운트할 값을 얻는다(활성 페이지 없음/부재 → null → 뷰는 빈 안내를 그린다). theme/mode 는
+// 문서에서, page 는 활성 페이지 소스의 렌더 부분집합(origin 제외)에서 뽑는다.
+export function activePagePayload(store: DesignStore): DesignPayload | null {
+  const id = store.preview.activePageId;
+  if (!id) return null;
+  const page = store.doc.pages.find((p) => p.id === id);
+  if (!page) return null;
+  const src = page.source;
+  const rp: RunnerPage =
+    src.kind === "tsx" ? { kind: "tsx", code: src.code } : { kind: "tree", root: src.root };
+  return { theme: store.doc.activeTheme, mode: store.doc.mode ?? "system", page: rp };
+}
+
 // 스토어 생성 — 동기 구성(doc=freshDoc)으로 즉시 반환한다. 하이드레이트는 별도 async(활성화 직후
 // void store.hydrate()). 이렇게 하면 명령 등록이 하이드레이트를 안 기다려 E2E 적재 경쟁이 없다.
 // 하이드레이트 진행 중 변이가 나면 우리 상태가 최신이므로 재수화 스왑을 건너뛴다(정합).
@@ -87,7 +103,7 @@ export function createStore(opts: {
   kv?: DataKv;
   projectId: string | null | undefined;
   dir: string;
-  onChange?: () => void; // 재수화/외부변경 후 알림(멀티윈도우 뷰 갱신 훅 — 헤드리스면 no-op).
+  onChange?: () => void; // 재수화/변이 후 알림 — subscribe 와 동치로 구독자 집합에 등록된다(뷰 갱신 훅).
 }): DesignStore {
   const { kv, dir } = opts;
   const key = docKey(opts.projectId);
@@ -97,24 +113,51 @@ export function createStore(opts: {
   let staleHydrate = false; // hydrate 대기 중 변이 발생 → 스왑 건너뜀.
   let watchSub: { dispose(): void } | null = null;
 
+  // 재렌더 구독자 집합(§7 Live law). 뷰가 subscribe 로 걸고 unmount 시 해제한다. opts.onChange 는
+  // 편의를 위해 하나의 구독자로 등록한다(멀티윈도우 뷰 갱신 훅과 동치).
+  const subscribers = new Set<() => void>();
+  if (opts.onChange) subscribers.add(opts.onChange);
+
   const store: DesignStore = {
     doc: freshDoc(),
     dir,
-    preview: { engine: null, pageId: null, url: null, server: freshServerState() },
+    preview: { activePageId: null },
     persist,
     hydrate,
+    subscribe,
+    notify,
     dispose,
   };
 
-  async function persist(): Promise<void> {
-    if (!kv) return;
-    if (hydrating) staleHydrate = true; // 하이드레이트 중 변이 → 그 결과를 우리 것이 이긴다.
-    writing++;
-    try {
-      await kv.set(key, store.doc);
-    } finally {
-      writing--;
+  // 구독자 전원 통지 — 한 구독자의 예외가 다른 구독자를 막지 않게 격리한다.
+  function notify(): void {
+    for (const cb of [...subscribers]) {
+      try {
+        cb();
+      } catch {
+        // 구독자(뷰 재렌더) 예외는 삼킨다 — 다른 창/구독자는 계속 갱신돼야 한다.
+      }
     }
+  }
+
+  function subscribe(cb: () => void): () => void {
+    subscribers.add(cb);
+    return () => {
+      subscribers.delete(cb);
+    };
+  }
+
+  async function persist(): Promise<void> {
+    if (kv) {
+      if (hydrating) staleHydrate = true; // 하이드레이트 중 변이 → 그 결과를 우리 것이 이긴다.
+      writing++;
+      try {
+        await kv.set(key, store.doc);
+      } finally {
+        writing--;
+      }
+    }
+    notify(); // 라이브 뷰 재렌더(§7 Live law) — kv 유무와 무관하게 변이는 통지한다.
   }
 
   async function hydrate(): Promise<void> {
@@ -125,7 +168,7 @@ export function createStore(opts: {
       const v = await kv.get(key);
       if (staleHydrate) return; // 대기 중 변이 발생 → 인메모리(이미 영속됨)가 최신.
       store.doc = coerceDoc(v);
-      opts.onChange?.();
+      notify();
     } catch {
       // 읽기 실패는 현 상태 유지(신선 문서로 계속).
     } finally {
@@ -137,7 +180,7 @@ export function createStore(opts: {
     if (!kv) return;
     try {
       store.doc = coerceDoc(await kv.get(key));
-      opts.onChange?.();
+      notify();
     } catch {
       // 유지.
     }

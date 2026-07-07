@@ -1,5 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
-import { freshDoc, docKey, coerceDoc, createStore, type DataKv } from "./store";
+import {
+  freshDoc,
+  docKey,
+  coerceDoc,
+  createStore,
+  activePagePayload,
+  type DataKv,
+} from "./store";
 import type { DesignDoc, DesignNode, DesignPage } from "../types";
 
 const goodNode = (): DesignNode => ({ id: "n1", type: "Stack", props: {}, children: [] });
@@ -178,7 +185,8 @@ describe("createStore", () => {
     const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
     expect(s.doc).toEqual(freshDoc());
     expect(s.dir).toBe("/x");
-    expect(s.preview).toEqual({ engine: null, pageId: null, url: null, server: { handle: null, port: null, alive: false } });
+    // v3 세션 상태는 활성 캔버스 페이지 하나뿐 — engine/url/server 는 제거됐다(§7·§11).
+    expect(s.preview).toEqual({ activePageId: null });
   });
 
   it("hydrate 는 kv 에서 문서를 복원", async () => {
@@ -236,5 +244,100 @@ describe("createStore", () => {
     kv.fire("doc:_global");
     await Promise.resolve();
     expect(s.doc).toEqual(freshDoc());
+  });
+});
+
+// ── 라이브 바인딩(§7 Live law): subscribe/notify/persist 재렌더 통지 ─────────────
+describe("subscribe/notify", () => {
+  it("persist 는 kv 없이도 구독자를 발화한다(변이 재렌더 — 뷰가 마운트만 되면 kv 무관)", async () => {
+    const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
+    const cb = vi.fn();
+    s.subscribe(cb);
+    await s.persist();
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("notify 는 구독자를 직접 발화한다(preview.open/refresh 의 activePageId 변경 경로)", () => {
+    const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
+    const cb = vi.fn();
+    s.subscribe(cb);
+    s.notify();
+    s.notify();
+    expect(cb).toHaveBeenCalledTimes(2);
+  });
+
+  it("subscribe 반환 함수로 해제하면 더 이상 발화하지 않는다", () => {
+    const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
+    const cb = vi.fn();
+    const off = s.subscribe(cb);
+    s.notify();
+    off();
+    s.notify();
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it("한 구독자의 예외가 다른 구독자를 막지 않는다(격리)", () => {
+    const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
+    const boom = vi.fn(() => {
+      throw new Error("render crash");
+    });
+    const ok = vi.fn();
+    s.subscribe(boom);
+    s.subscribe(ok);
+    expect(() => s.notify()).not.toThrow();
+    expect(ok).toHaveBeenCalledTimes(1);
+  });
+
+  it("opts.onChange 는 하나의 구독자로 등록된다(하이드레이트가 발화)", async () => {
+    const kv = fakeKv(goodDoc());
+    const onChange = vi.fn();
+    const s = createStore({ kv, projectId: null, dir: "/x", onChange });
+    await s.hydrate();
+    expect(onChange).toHaveBeenCalled();
+  });
+});
+
+// ── activePagePayload: 활성 페이지 → 렌더 코어 페이로드 투영(§7) ─────────────────
+describe("activePagePayload", () => {
+  it("활성 페이지가 없으면 null", () => {
+    const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
+    s.doc = goodDoc();
+    expect(activePagePayload(s)).toBeNull();
+  });
+
+  it("활성 페이지 id 가 문서에 없으면 null(삭제된 페이지 방어)", () => {
+    const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
+    s.doc = goodDoc();
+    s.preview.activePageId = "p-gone";
+    expect(activePagePayload(s)).toBeNull();
+  });
+
+  it("tree 페이지 → tree RunnerPage + 문서 테마/모드", () => {
+    const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
+    s.doc = goodDoc(); // matcha·system, tree 페이지 p1
+    s.preview.activePageId = "p1";
+    expect(activePagePayload(s)).toEqual({
+      theme: "matcha",
+      mode: "system",
+      page: { kind: "tree", root: goodNode() },
+    });
+  });
+
+  it("tsx 페이지 → tsx RunnerPage(code, origin 제외)", () => {
+    const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
+    s.doc = { version: 1, activeTheme: "gothic", mode: "dark", pages: [tsxPage()], seq: 2 };
+    s.preview.activePageId = "p2";
+    expect(activePagePayload(s)).toEqual({
+      theme: "gothic",
+      mode: "dark",
+      page: { kind: "tsx", code: "export default function P(){return null;}" },
+    });
+  });
+
+  it("문서 mode 부재 시 페이로드 mode 는 system(§9)", () => {
+    const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
+    s.doc = { version: 1, activeTheme: "neutral", pages: [treePage()], seq: 1 };
+    s.preview.activePageId = "p1";
+    expect(activePagePayload(s)?.mode).toBe("system");
   });
 });
