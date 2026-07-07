@@ -93,7 +93,7 @@ function controlledInputs(): ReadonlySet<string> {
 // <style> 를 innerHTML 로 읽어(fetch 없음) 인앱에서 완전 동작. core 는 앵커 CSS 를 안 써 문서 전역
 // 패스가 core 엔 inert. 실패는 렌더를 죽이지 않는다(위치만 근사).
 let anchorRan = false;
-function maybePolyfillAnchor(): void {
+function maybePolyfillAnchor(shadow?: ShadowRoot): void {
   if (anchorRan) return;
   anchorRan = true;
   try {
@@ -102,7 +102,12 @@ function maybePolyfillAnchor(): void {
       typeof CSS.supports === "function" &&
       CSS.supports("anchor-name", "--x");
     if (supported) return; // 네이티브 지원 → 0 비용.
-    void anchorPolyfill({ useAnimationFrame: true });
+    // roots=[document, shadow] — 앵커 스타일·엘리먼트가 shadow 안에 있고, 팝오버는 top-layer(문서)로
+    // 승격되므로 둘 다 스캔해야 한다(shadow 만 주면 top-layer 팝오버를 놓친다). 폴리필 타입은 root 를
+    // Document|HTMLElement 로만 선언하나 런타임은 querySelectorAll 만 호출하므로 ShadowRoot 도 동작한다
+    // (타입 미선언일 뿐 — 캐스트로 넘긴다).
+    const roots = (shadow ? [document, shadow] : [document]) as unknown as HTMLElement[];
+    void anchorPolyfill({ useAnimationFrame: true, roots });
   } catch {
     // 폴백 실패는 미리보기를 죽이지 않는다.
   }

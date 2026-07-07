@@ -69,11 +69,13 @@ export function buildCanvasView(deps: CanvasViewDeps): CanvasView {
     host.style.overflow = "hidden";
     shadow.appendChild(host);
 
-    // 앵커 포지셔닝 폴백 — 네이티브 미지원시 1회(§7 Anchor polyfill law). 프로덕션 폴백은 자체
-    // 게이트+idempotent, 테스트는 render.polyfill 미주입이라 건너뛴다.
+    // 앵커 포지셔닝 폴백 — 네이티브 미지원시 1회(§7 Anchor polyfill law). shadow root 를 넘긴다:
+    // astryx Selector/Popover 의 앵커 스타일·엘리먼트가 shadow 안에 있어, 기본 document 스캔만으론
+    // 폴리필이 앵커를 못 봐 팝업이 좌상단에 뜬다(WKWebView 실측). roots=[document, shadow] 로 교정.
+    // 프로덕션 폴백은 자체 게이트+idempotent, 테스트는 render.polyfill 미주입이라 건너뛴다.
     if (!polyfilled && render.polyfill) {
       polyfilled = true;
-      render.polyfill();
+      render.polyfill(shadow);
     }
 
     const root = createRoot(host);
