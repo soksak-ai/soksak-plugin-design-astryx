@@ -95,6 +95,7 @@ export function CanvasApp({
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
+        color: "var(--color-text-primary)",
       }}
     >
       <ThemeProvider value={ctxValue}>
@@ -107,17 +108,16 @@ export function CanvasApp({
         <div
           className="canvas-viewport"
           style={{
+            // block + margin:auto 프레임 — flex 아이템 폭 함정(내용폭 수축) 회피. 기본 배경은
+            // 테마 변수로 칠한다(미도색이면 앱 다크가 비쳐 light 모드가 다크로 보인다 — 눈검증 실측).
             flex: "1 1 auto",
             overflow: "auto",
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "flex-start",
             padding: 16,
-            background: controls.background || undefined,
+            background: controls.background || "var(--color-background-body)",
           }}
         >
           {page ? (
-            <div className="canvas-frame" style={widthStyle(controls.width)}>
+            <div className="canvas-frame" style={{ ...widthStyle(controls.width), margin: "0 auto" }}>
               <NodeBoundary label={`page ${page.id}`}>
                 {renderPage(page, render)}
               </NodeBoundary>
