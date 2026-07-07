@@ -55,6 +55,8 @@
       { "name": "docs.get", "title": { "en": "Get doctrine topic", "ko": "독트린 문서 조회" } },
       { "name": "preview.open", "title": { "en": "Open canvas", "ko": "캔버스 열기" } },
       { "name": "preview.refresh", "title": { "en": "Re-render canvas", "ko": "캔버스 재렌더" } },
+      { "name": "canvas.select", "title": { "en": "Select node", "ko": "노드 선택" } },
+      { "name": "canvas.set", "title": { "en": "Set canvas framing", "ko": "캔버스 프레이밍 설정" } },
       { "name": "export.tsx", "title": { "en": "Export TSX", "ko": "TSX 내보내기" } }
     ],
     "skill": { "path": "skill/SKILL.md" }

@@ -42,6 +42,8 @@ All commands take one JSON params object and return the v1 message envelope `{ o
 | `catalog.doc` | `{ type }` | Full catalog entry: props, enums, defaults, `acceptsChildren`. |
 | `preview.open` | `{ pageId }` | Selects the page and opens/focuses the in-app canvas view. |
 | `preview.refresh` | `{ pageId? }` | Forces an explicit canvas re-render (no-op when no view is open). |
+| `canvas.select` | `{ pageId?, nodeId }` | Sets the view-session selection (the same field the structure-tree and canvas clicks write); `pageId` defaults to the active page, `nodeId` null clears to page-only. Non-null `nodeId` must name a live tree-page node → else `NOT_FOUND`. |
+| `canvas.set` | `{ viewport?, background? }` | Sets the view-session framing: `viewport` `fill`/`1280`/`768`/`375` (bad value → `INVALID_PROP` with `data.validValues`), `background` a CSS color or `neutral`/`''` for the default. At least one required. |
 | `export.tsx` | `{ pageId }` | TSX for the page (a tsx page's `code` verbatim, or the tree serializer). |
 
 Error `code` is a closed set: `NOT_FOUND`, `INVALID_TYPE`, `INVALID_PROP`, `INVALID_TARGET`, `INVALID_ARG`, `DUPLICATE`, `TEMPLATE_UNKNOWN`, `TEMPLATE_UNAVAILABLE`, `THEME_UNKNOWN`, `COMPILE_FAILED`, `PREVIEW_FAILED`, `EXPORT_FAILED`.
@@ -52,11 +54,12 @@ The primary design surface is an in-app **canvas view** (a plugin view, id `canv
 
 The view mounts the active page's Astryx components **directly** as a React tree inside a Shadow DOM in the app webview, live-bound to the same module store the commands mutate — so every command (`comp.*`, `page.*`, `theme.set`, `template.apply`, `page.code.set`) re-renders the active page instantly, with no navigation and no disk emission. The Shadow DOM contains a global CSS reset (the erd precedent): the view injects `reset.css` → `astryx.css` (with `:root` rewritten to `:host`) → all 7 theme blocks into the shadow, and carries the active theme on the shadow-host wrapper via `data-astryx-theme` + `color-scheme`; switching theme or mode swaps those attributes in place.
 
-The view chrome is a toolbar above the rendering area, whose controls are all command clients (headless and UI stay one truth):
+The view chrome is a three-pane frame dogfooded from Astryx itself (Layout + LayoutPanel + LayoutContent): a **structure** panel (left, ~260px), the canvas (center), and an **inspector** panel (right, ~320px), with a toolbar header above. Every control is a command client (headless and UI stay one truth):
 
-- **Page selector** — lists the doc's pages and selects the active one.
-- **Theme (7) + mode (light/dark/system) selectors** — drive `theme.set`.
-- **Canvas controls** — viewport-width presets (`fill` / `1280` / `768` / `375`) and canvas background. These are view-local framing: not part of the document, not persisted, and per-window.
+- **Toolbar header** — page selector, theme (7) + mode (light/dark/system) selectors driving `theme.set`, viewport/background framing driving `canvas.set`, and the `TSX 내보내기` (`export.tsx`) button.
+- **Structure panel** — a `TreeList` projecting the active page's node tree (tsx pages show a single read-only `⌁ code` row). Clicking a node routes through `canvas.select`.
+- **Inspector panel** — a prop form for the selected node built from its `catalog.doc` schema (enum → Selector, boolean → Switch, spacing → stepper, string/number/style → text), dispatching `comp.set` on edit.
+- **Canvas** — clicking a rendered node routes through `canvas.select`; the selection highlights in both the tree and the canvas. Framing (`canvas.set`) and selection (`canvas.select`) are view-local view-session state: not part of the document, not persisted, per-window, but fully commandable so an LLM can frame or select headlessly.
 
 The rendering core (reused from the earlier transport) branches on `page.kind`: a **tree** page resolves each `node.type` from the `@astryxdesign/core` barrel and renders the tree; a **tsx** page is compiled with sucrase and mounted through a require-shim that resolves `react`, the `@astryxdesign/core` barrel, heroicons, and lucide from the bundle — its default export is mounted losslessly. Compile and runtime errors render as visible error surfaces, never a blank page.
 

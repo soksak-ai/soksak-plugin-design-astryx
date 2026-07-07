@@ -153,8 +153,9 @@ export interface Err {
   code: Exclude<Code, "OK">;
   message: string;
   // 실패 축의 구조적 진단 채널 — 대칭 봉투 {ok,code,message,data} 를 따른다. 성공 축 데이터와 달리
-  // 실패 데이터는 선택적이며, 유일 소비자는 page.code.set 의 COMPILE_FAILED(data.diagnostics = 컴파일러
-  // 오류 원문). 사람용 요약은 늘 message 에도 담아 코어가 실패 data 를 흘려도 진단이 사라지지 않게 한다.
+  // 실패 데이터는 선택적이며, 두 소비자: page.code.set 의 COMPILE_FAILED(data.diagnostics = 컴파일러
+  // 오류 원문) 와 canvas.set 의 INVALID_PROP(data.validValues = 허용 viewport 집합, §4). 사람용 요약은
+  // 늘 message 에도 담아 코어가 실패 data 를 흘려도 진단이 사라지지 않게 한다.
   data?: Record<string, unknown>;
 }
 export type Envelope<D extends Record<string, unknown> = Record<string, unknown>> = Ok<D> | Err;
@@ -191,19 +192,32 @@ export interface DesignPayload {
   page: RunnerPage;
 }
 
-// ── 캔버스 뷰 로컬 컨트롤 (비영속 — 문서에 저장 안 함, CONTRACT §7 Toolbar law) ──
-// 툴바가 조작하는 렌더 프레이밍 값. 문서(DesignDoc)가 아니라 뷰 인스턴스에만 산다 — 렌더 결과
-// (페이지/테마/모드)가 아니라 렌더 프레임(뷰포트 폭·배경)이라 문서 상태와 직교한다(창마다 독립).
+// ── 캔버스 프레이밍 컨트롤 (스토어 뷰-세션, 비영속 — 문서 아님, CONTRACT §7 Toolbar law) ──
+// 툴바·canvas.set 이 조작하는 렌더 프레이밍 값. 문서(DesignDoc)가 아니라 스토어의 뷰-세션에 산다
+// — 렌더 결과(페이지/테마/모드)가 아니라 렌더 프레임(뷰포트 폭·배경)이라 문서 상태와 직교한다.
+// canvas.set 으로 명령 가능(헤드리스): 뷰가 없어도 세션에 남아 다음 마운트가 이 프레임으로 연다.
+// app.data.kv 에 영속하지 않는다(문서만 영속) — 세션 필드다(§11).
 export type ViewportWidth = "fill" | 1280 | 768 | 375;
 export const VIEWPORT_WIDTHS: readonly ViewportWidth[] = ["fill", 1280, 768, 375];
 
 export interface CanvasControls {
   width: ViewportWidth; // 렌더 영역 폭 프리셋(반응형 확인용). fill = 컨테이너 채움.
-  background: string; // 렌더 영역(뷰포트 바깥 여백) 배경 CSS 색. 빈 문자열 = 중립 기본.
+  background: string; // 렌더 영역(뷰포트 바깥 여백) 배경 CSS 색. 빈 문자열 = 중립 기본("neutral").
 }
 
 export function freshCanvasControls(): CanvasControls {
   return { width: "fill", background: "" };
+}
+
+// ── 선택 (스토어 뷰-세션, 비영속 — 문서 아님, CONTRACT §7 Selection law) ──
+// 선택은 {pageId, nodeId|null} 한 필드다. 세 진입점이 같은 스토어 필드로 수렴한다:
+//   canvas.select 명령 · 트리 노드 클릭 · 캔버스 클릭. 뷰는 트리·캔버스 양쪽에서 선택 노드를
+// 하이라이트하고 인스펙터가 이 필드에 바인딩된다. nodeId=null 은 페이지만 선택(노드 해제).
+// 재렌더에도 생존하고, 선택 노드가 사라지면(삭제·페이지 전환) 스토어가 nodeId 를 null 로 정리한다.
+// 문서(DesignDoc)가 아니라 스토어 세션에 산다 — canvas.select 로 명령 가능(헤드리스). 영속 안 함(§11).
+export interface Selection {
+  pageId: string; // 선택이 속한 페이지.
+  nodeId: string | null; // 선택 노드. null = 페이지만 선택(노드 미선택/해제).
 }
 
 // ── 호스트 API 구조 타입(최소 부분집합) ─────────────────────────────────────

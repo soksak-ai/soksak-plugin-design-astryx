@@ -58,8 +58,8 @@ describe("적합성: 선언 ≡ 등록", () => {
     expect(new Set(registered).size).toBe(registered.length);
   });
 
-  it("집계 일치 — 고정 명령 표면 26개(24 + page.code.get/page.code.set)", () => {
+  it("집계 일치 — 고정 명령 표면 28개(26 + canvas.select/canvas.set)", () => {
     expect(registered.length).toBe(declared.length);
-    expect(declared.length).toBe(26);
+    expect(declared.length).toBe(28);
   });
 });
