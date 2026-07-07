@@ -1,0 +1,38 @@
+{
+  "name": "soksak-plugin-design-astryx",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "gen": "node scripts/gen-catalog.mjs && node scripts/gen-templates.mjs && node scripts/gen-docs.mjs",
+    "build:runner": "node scripts/build-runner.mjs",
+    "build": "npm run gen && npm run build:runner && node build.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@astryxdesign/core": "0.1.3",
+    "@astryxdesign/theme-butter": "0.1.3",
+    "@astryxdesign/theme-chocolate": "0.1.3",
+    "@astryxdesign/theme-gothic": "0.1.3",
+    "@astryxdesign/theme-matcha": "0.1.3",
+    "@astryxdesign/theme-neutral": "0.1.3",
+    "@astryxdesign/theme-stone": "0.1.3",
+    "@astryxdesign/theme-y2k": "0.1.3",
+    "@heroicons/react": "^2.2.0",
+    "@oddbird/css-anchor-positioning": "^0.9.0",
+    "@stylexjs/stylex": "0.18.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "sucrase": "^3.35.1"
+  },
+  "devDependencies": {
+    "@astryxdesign/cli": "0.1.3",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "esbuild": "^0.28.1",
+    "jsdom": "^27.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^2.1.0"
+  }
+}

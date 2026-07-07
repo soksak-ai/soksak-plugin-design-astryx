@@ -1,0 +1,240 @@
+import { describe, it, expect, vi } from "vitest";
+import { freshDoc, docKey, coerceDoc, createStore, type DataKv } from "./store";
+import type { DesignDoc, DesignNode, DesignPage } from "../types";
+
+const goodNode = (): DesignNode => ({ id: "n1", type: "Stack", props: {}, children: [] });
+// v2 페이지 — 소스 판별 유니온. tree 페이지는 source.root, tsx 페이지는 source.code 가 진실.
+const treePage = (): DesignPage => ({
+  id: "p1",
+  name: "Home",
+  source: { kind: "tree", root: goodNode() },
+});
+const tsxPage = (): DesignPage => ({
+  id: "p2",
+  name: "Landing",
+  source: { kind: "tsx", code: "export default function P(){return null;}", origin: "pages/landing" },
+});
+const goodDoc = (): DesignDoc => ({
+  version: 1,
+  activeTheme: "matcha",
+  mode: "system",
+  pages: [treePage()],
+  seq: 1,
+});
+
+describe("freshDoc", () => {
+  it("빈 문서는 neutral 테마·system 모드·페이지 0·seq 0", () => {
+    expect(freshDoc()).toEqual({
+      version: 1,
+      activeTheme: "neutral",
+      mode: "system",
+      pages: [],
+      seq: 0,
+    });
+  });
+});
+
+describe("docKey", () => {
+  it("프로젝트 id 로 파티션, 없으면 _global", () => {
+    expect(docKey("proj-a")).toBe("doc:proj-a");
+    expect(docKey(null)).toBe("doc:_global");
+    expect(docKey(undefined)).toBe("doc:_global");
+  });
+});
+
+describe("coerceDoc", () => {
+  it("유효 v2 tree 문서는 통과", () => {
+    expect(coerceDoc(goodDoc())).toEqual(goodDoc());
+  });
+
+  it("v2 tsx 페이지는 code·origin 보존", () => {
+    const raw = { version: 1, activeTheme: "neutral", mode: "system", pages: [tsxPage()], seq: 2 };
+    const d = coerceDoc(raw);
+    expect(d.pages[0]).toEqual(tsxPage());
+  });
+
+  it("tsx 페이지의 origin 부재는 그대로(키 없음) 보존", () => {
+    const raw = {
+      version: 1,
+      activeTheme: "neutral",
+      pages: [{ id: "p9", name: "Bare", source: { kind: "tsx", code: "export default ()=>null" } }],
+      seq: 9,
+    };
+    const d = coerceDoc(raw);
+    expect(d.pages[0].source).toEqual({ kind: "tsx", code: "export default ()=>null" });
+  });
+
+  it("v1 root-only 페이지는 tree source 로 승격(마이그레이션 파일 없음)", () => {
+    const v1 = {
+      version: 1,
+      activeTheme: "neutral",
+      pages: [{ id: "p1", name: "Home", root: goodNode() }],
+      seq: 1,
+    };
+    const d = coerceDoc(v1);
+    expect(d.pages[0]).toEqual({ id: "p1", name: "Home", source: { kind: "tree", root: goodNode() } });
+  });
+
+  it("소스 부재·손상 페이지는 빈 tree 페이지로 복구(드랍 아님), 루트 id 는 seq 에서 발급", () => {
+    const raw = {
+      version: 1,
+      activeTheme: "neutral",
+      pages: [{ id: "p3", name: "x", root: { id: "n" } }], // root 가 nodeish 아님 + source 부재
+      seq: 1,
+    };
+    const d = coerceDoc(raw);
+    expect(d.pages).toHaveLength(1);
+    expect(d.pages[0].id).toBe("p3");
+    const src = d.pages[0].source;
+    expect(src.kind).toBe("tree");
+    if (src.kind === "tree") {
+      expect(src.root.type).toBe("Stack");
+      expect(src.root.props).toEqual({});
+      expect(src.root.children).toEqual([]);
+      expect(src.root.id).toBe("n2"); // ++seq: 1 → 2
+    }
+    expect(d.seq).toBe(2); // 발급으로 seq 증가
+  });
+
+  it("id/name 없는 항목만 드랍(id 만·junk·숫자), 페이지-ish 는 복구", () => {
+    const raw = {
+      version: 1,
+      activeTheme: "neutral",
+      pages: [treePage(), { id: "p2" }, "junk", 42],
+      seq: 1,
+    };
+    const d = coerceDoc(raw);
+    expect(d.pages).toHaveLength(1);
+    expect(d.pages[0].id).toBe("p1");
+  });
+
+  it("객체가 아니면 신선 문서", () => {
+    expect(coerceDoc(null)).toEqual(freshDoc());
+    expect(coerceDoc("x")).toEqual(freshDoc());
+    expect(coerceDoc(42)).toEqual(freshDoc());
+  });
+
+  it("version 이 1 이 아니면 신선 문서", () => {
+    expect(coerceDoc({ version: 2, activeTheme: "matcha", pages: [], seq: 0 })).toEqual(freshDoc());
+  });
+
+  it("미지 테마는 neutral 로 강제", () => {
+    const d = coerceDoc({ version: 1, activeTheme: "rainbow", pages: [], seq: 0 });
+    expect(d.activeTheme).toBe("neutral");
+  });
+
+  it("mode 부재(구 문서)·미지 값은 system 으로 강제, 유효 값은 보존", () => {
+    // 구 문서엔 mode 필드가 없다 → system.
+    expect(coerceDoc({ version: 1, activeTheme: "neutral", pages: [], seq: 0 }).mode).toBe("system");
+    // 미지 값도 system.
+    expect(
+      coerceDoc({ version: 1, activeTheme: "neutral", mode: "sepia", pages: [], seq: 0 }).mode,
+    ).toBe("system");
+    // 유효 값은 그대로.
+    expect(
+      coerceDoc({ version: 1, activeTheme: "neutral", mode: "dark", pages: [], seq: 0 }).mode,
+    ).toBe("dark");
+    expect(
+      coerceDoc({ version: 1, activeTheme: "gothic", mode: "light", pages: [], seq: 0 }).mode,
+    ).toBe("light");
+  });
+
+  it("seq 는 음수·비수를 0 으로", () => {
+    expect(coerceDoc({ version: 1, activeTheme: "neutral", pages: [], seq: -5 }).seq).toBe(0);
+    expect(coerceDoc({ version: 1, activeTheme: "neutral", pages: [], seq: "x" }).seq).toBe(0);
+    expect(coerceDoc({ version: 1, activeTheme: "neutral", pages: [], seq: 7.9 }).seq).toBe(7);
+  });
+
+  it("pages 가 배열이 아니면 빈 배열", () => {
+    expect(coerceDoc({ version: 1, activeTheme: "neutral", pages: {}, seq: 0 }).pages).toEqual([]);
+  });
+});
+
+// 인메모리 가짜 kv — get/set/watch. set 이 watch 콜백을 발화(코어 data-change 브로드캐스트 모사).
+function fakeKv(initial?: unknown): DataKv & { fire: (key: string | null) => void; store: Map<string, unknown> } {
+  const map = new Map<string, unknown>();
+  const watchers = new Set<(k: string | null) => void>();
+  if (initial !== undefined) map.set("doc:_global", initial);
+  return {
+    store: map,
+    async get(k) {
+      return map.get(k);
+    },
+    async set(k, v) {
+      map.set(k, v);
+    },
+    watch(cb) {
+      watchers.add(cb);
+      return { dispose: () => watchers.delete(cb) };
+    },
+    fire(k) {
+      for (const w of watchers) w(k);
+    },
+  };
+}
+
+describe("createStore", () => {
+  it("kv 없으면 신선 문서로 시작", () => {
+    const s = createStore({ kv: undefined, projectId: null, dir: "/x" });
+    expect(s.doc).toEqual(freshDoc());
+    expect(s.dir).toBe("/x");
+    expect(s.preview).toEqual({ engine: null, pageId: null, url: null, server: { handle: null, port: null, alive: false } });
+  });
+
+  it("hydrate 는 kv 에서 문서를 복원", async () => {
+    const kv = fakeKv(goodDoc());
+    const s = createStore({ kv, projectId: null, dir: "/x" });
+    expect(s.doc).toEqual(freshDoc()); // 동기 구성 시점엔 신선
+    await s.hydrate();
+    expect(s.doc).toEqual(goodDoc()); // 하이드레이트 후 복원
+  });
+
+  it("hydrate 는 깨진 값을 신선 문서로 강제", async () => {
+    const kv = fakeKv({ version: 9 });
+    const s = createStore({ kv, projectId: null, dir: "/x" });
+    await s.hydrate();
+    expect(s.doc).toEqual(freshDoc());
+  });
+
+  it("persist 는 현재 doc 를 kv 키에 기록", async () => {
+    const kv = fakeKv();
+    const s = createStore({ kv, projectId: "proj-a", dir: "/x" });
+    s.doc = goodDoc();
+    await s.persist();
+    expect(kv.store.get("doc:proj-a")).toEqual(goodDoc());
+  });
+
+  it("외부 변경(watch)은 재수화 + onChange 호출", async () => {
+    const kv = fakeKv(freshDoc());
+    const onChange = vi.fn();
+    const s = createStore({ kv, projectId: null, dir: "/x", onChange });
+    await s.hydrate();
+    // 다른 창이 문서를 바꿈.
+    await kv.set("doc:_global", goodDoc());
+    kv.fire("doc:_global");
+    await Promise.resolve(); // rehydrate microtask
+    await Promise.resolve();
+    expect(s.doc).toEqual(goodDoc());
+    expect(onChange).toHaveBeenCalled();
+  });
+
+  it("다른 프로젝트 키 변경은 무시", async () => {
+    const kv = fakeKv(goodDoc());
+    const s = createStore({ kv, projectId: null, dir: "/x" });
+    await s.hydrate();
+    const before = s.doc;
+    kv.fire("doc:other");
+    await Promise.resolve();
+    expect(s.doc).toBe(before);
+  });
+
+  it("dispose 후에는 watch 발화가 재수화를 안 일으킨다", async () => {
+    const kv = fakeKv(freshDoc());
+    const s = createStore({ kv, projectId: null, dir: "/x" });
+    s.dispose();
+    await kv.set("doc:_global", goodDoc());
+    kv.fire("doc:_global");
+    await Promise.resolve();
+    expect(s.doc).toEqual(freshDoc());
+  });
+});

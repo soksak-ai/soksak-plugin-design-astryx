@@ -1,0 +1,49 @@
+{
+  "spec": "soksak-plugin-spec@1",
+  "id": "soksak-plugin-design-astryx",
+  "name": { "en": "Astryx Design", "ko": "Astryx 디자인" },
+  "version": "0.1.0",
+  "repo": "https://github.com/soksak-ai/soksak-plugin-design-astryx.git",
+  "description": {
+    "en": "Design by talking — build pages as a tree (component tree, comp.* editable) or as tsx (verbatim 'use client' source, seeded from 619 shipped Astryx templates and edited by page.code.set), preview them in a browser view, and export TSX. Headless: every capability is a command, driven from CLI/MCP.",
+    "ko": "말로 하는 디자인 — 페이지를 트리(컴포넌트 트리, comp.* 편집) 또는 tsx(원본 'use client' 소스 — 619개 shipped Astryx 템플릿에서 시드해 page.code.set 으로 편집)로 조립하고 브라우저 뷰로 미리보고 TSX 로 내보낸다. 헤드리스: 모든 기능이 명령이라 CLI/MCP 로 구동한다."
+  },
+  "entry": "main.js",
+  "dependencies": {
+    "soksak-plugin-browser-chromium": "^0.1.0",
+    "soksak-plugin-browser-native": "^2.0.0"
+  },
+  "permissions": ["commands", "data", "fs:write",
+    "process"],
+  "contributes": {
+    "commands": [
+      { "name": "ping", "title": { "en": "Ping (load/version check)", "ko": "플러그인 적재/버전 확인(E2E)" } },
+      { "name": "state", "title": { "en": "Get document state", "ko": "문서 상태 조회" } },
+      { "name": "page.create", "title": { "en": "Create page", "ko": "페이지 생성" } },
+      { "name": "page.list", "title": { "en": "List pages", "ko": "페이지 목록" } },
+      { "name": "page.rename", "title": { "en": "Rename page", "ko": "페이지 이름 변경" } },
+      { "name": "page.duplicate", "title": { "en": "Duplicate page", "ko": "페이지 복제" } },
+      { "name": "page.remove", "title": { "en": "Remove page", "ko": "페이지 삭제" }, "danger": "destructive" },
+      { "name": "comp.add", "title": { "en": "Add component", "ko": "컴포넌트 추가" } },
+      { "name": "comp.set", "title": { "en": "Set component props", "ko": "컴포넌트 속성 설정" } },
+      { "name": "comp.move", "title": { "en": "Move component", "ko": "컴포넌트 이동" } },
+      { "name": "comp.remove", "title": { "en": "Remove component", "ko": "컴포넌트 삭제" }, "danger": "destructive" },
+      { "name": "comp.get", "title": { "en": "Get component", "ko": "컴포넌트 조회" } },
+      { "name": "comp.find", "title": { "en": "Find components", "ko": "컴포넌트 검색" } },
+      { "name": "theme.set", "title": { "en": "Set theme", "ko": "테마 설정" } },
+      { "name": "theme.list", "title": { "en": "List themes", "ko": "테마 목록" } },
+      { "name": "template.list", "title": { "en": "List templates", "ko": "템플릿 목록" } },
+      { "name": "template.apply", "title": { "en": "Apply template", "ko": "템플릿 적용" } },
+      { "name": "page.code.get", "title": { "en": "Get page code", "ko": "페이지 코드 조회" } },
+      { "name": "page.code.set", "title": { "en": "Set page code", "ko": "페이지 코드 설정" } },
+      { "name": "catalog.list", "title": { "en": "List catalog components", "ko": "카탈로그 컴포넌트 목록" } },
+      { "name": "catalog.doc", "title": { "en": "Component catalog doc", "ko": "컴포넌트 카탈로그 문서" } },
+      { "name": "docs.list", "title": { "en": "List doctrine topics", "ko": "독트린 문서 목록" } },
+      { "name": "docs.get", "title": { "en": "Get doctrine topic", "ko": "독트린 문서 조회" } },
+      { "name": "preview.open", "title": { "en": "Open preview", "ko": "미리보기 열기" } },
+      { "name": "preview.refresh", "title": { "en": "Refresh preview", "ko": "미리보기 갱신" } },
+      { "name": "export.tsx", "title": { "en": "Export TSX", "ko": "TSX 내보내기" } }
+    ],
+    "skill": { "path": "skill/SKILL.md" }
+  }
+}
