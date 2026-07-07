@@ -1,7 +1,5 @@
 node_modules/
 generated/
-.preview/*
-!.preview/.gitkeep
 
 # local-only working notes (never committed)
 secret/

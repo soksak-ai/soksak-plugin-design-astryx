@@ -136,9 +136,8 @@ export type Code =
   | "TEMPLATE_UNKNOWN" // template id 가 templates.json 에 없음.
   | "TEMPLATE_UNAVAILABLE" // template 은 있으나 available=false(미설치/컴파일타임 의존) — reason 동반.
   | "THEME_UNKNOWN" // theme 이름이 THEMES 밖.
-  | "COMPILE_FAILED" // page.code.set 의 TSX 가 러너 sucrase 설정에서 컴파일 실패(진단 = data.diagnostics).
-  | "PREVIEW_FAILED" // 미리보기 아티팩트 기록/브라우저 구동 실패.
-  | "DEP_MISSING" // 브라우저 의존 플러그인이 둘 다 미가용(ping 실패).
+  | "COMPILE_FAILED" // page.code.set 의 TSX 가 렌더 코어 sucrase 설정에서 컴파일 실패(진단 = data.diagnostics).
+  | "PREVIEW_FAILED" // 캔버스 뷰 열기/포커스 실패(plugin.view.open 비-ok — §7 View law).
   | "EXPORT_FAILED"; // TSX 직렬화 실패.
 
 // 대칭 봉투 = 소비자(CLI/MCP/활동 트레이스)가 보는 정규화된 와이어 결과. 코어 registry.execute 가
@@ -175,20 +174,36 @@ export function err(
   return data === undefined ? { ok: false, code, message } : { ok: false, code, message, data };
 }
 
-// ── 러너로 주입되는 디자인 페이로드 (window.__DESIGN__) ──────────────────────
-// 미리보기 문서에 인라인되는 값. 러너는 page.kind 로 두 경로를 가른다(CONTRACT §7):
+// ── 렌더 코어에 전달되는 디자인 페이로드 ─────────────────────────────────────
+// 캔버스 뷰가 렌더 코어(src/render-core, §7)에 인프로세스로 넘기는 값(문서 주입 아님 — v3 는 아티팩트·
+// file:// 없음). 렌더 코어는 page.kind 로 두 경로를 가른다(CONTRACT §7):
 //   - tree: root 트리를 배럴에서 type→컴포넌트로 해소해 렌더(v1 경로).
-//   - tsx: code 를 러너의 sucrase 설정(Learn Gate B)으로 트랜스폼 후 require-shim 으로 실행,
+//   - tsx: code 를 렌더 코어의 sucrase 설정(Learn Gate B)으로 트랜스폼 후 require-shim 으로 실행,
 //          default export 를 마운트. 컴파일/런타임 오류는 빈 화면이 아니라 보이는 오류 표면.
-// RunnerPage 는 PageSource 의 렌더 부분집합(origin 제외 — 러너는 유래를 모른다).
+// RunnerPage 는 PageSource 의 렌더 부분집합(origin 제외 — 렌더 코어는 유래를 모른다).
 export type RunnerPage =
   | { kind: "tree"; root: DesignNode }
   | { kind: "tsx"; code: string };
 
 export interface DesignPayload {
   theme: ThemeName;
-  mode?: ColorMode; // 없으면 러너가 system 으로 렌더(§9). 명령 계층이 store.doc.mode ?? "system" 로 채운다.
+  mode?: ColorMode; // 없으면 렌더 코어가 system 으로 렌더(§9). 명령 계층이 store.doc.mode ?? "system" 로 채운다.
   page: RunnerPage;
+}
+
+// ── 캔버스 뷰 로컬 컨트롤 (비영속 — 문서에 저장 안 함, CONTRACT §7 Toolbar law) ──
+// 툴바가 조작하는 렌더 프레이밍 값. 문서(DesignDoc)가 아니라 뷰 인스턴스에만 산다 — 렌더 결과
+// (페이지/테마/모드)가 아니라 렌더 프레임(뷰포트 폭·배경)이라 문서 상태와 직교한다(창마다 독립).
+export type ViewportWidth = "fill" | 1280 | 768 | 375;
+export const VIEWPORT_WIDTHS: readonly ViewportWidth[] = ["fill", 1280, 768, 375];
+
+export interface CanvasControls {
+  width: ViewportWidth; // 렌더 영역 폭 프리셋(반응형 확인용). fill = 컨테이너 채움.
+  background: string; // 렌더 영역(뷰포트 바깥 여백) 배경 CSS 색. 빈 문자열 = 중립 기본.
+}
+
+export function freshCanvasControls(): CanvasControls {
+  return { width: "fill", background: "" };
 }
 
 // ── 호스트 API 구조 타입(최소 부분집합) ─────────────────────────────────────
@@ -196,6 +211,27 @@ export interface DesignPayload {
 // 이 플러그인이 실제로 쓰는 부분만 구조적으로 선언한다. 전체 표면 = 코어 src/plugins/api.ts.
 export interface HostDisposable {
   dispose: () => void;
+}
+
+// ── 뷰 배치·provider 구조 타입 (코어 뷰 호스트 계약의 최소 부분집합) ────────────
+// 전체 표면 = 코어 src/plugins/viewRegistry.ts. 이 플러그인이 실제 쓰는 부분만 구조적으로 선언한다.
+export type ViewPlacement = "sidebar-right" | "sidebar-left" | "sidebar-footer" | "content";
+
+// 캔버스 뷰가 마운트 시 받는 컨텍스트(코어 PluginViewContext 최소 부분집합). projectId 로 스토어
+// 파티션을 알고, setTitle 로 활성 페이지명을 탭 제목에 반영한다(선택). 라이브 재렌더는 store.onChange
+// 구독으로 하지 이 컨텍스트가 아니다(§7 Live law) — 뷰와 명령이 같은 모듈 스토어를 공유하기 때문(erd 동형).
+export interface ViewContext {
+  projectId: string;
+  viewId: string | null;
+  setTitle: (title: string) => void;
+}
+
+// 코어 뷰 호스트에 바인딩되는 provider. React 비요구 — 컨테이너 DOM 에 직접 그린다(우리는 shadow+React).
+// mount: attachShadow → CSS 주입(reset+astryx(:root→:host)+7 테마) → wrapper[data-astryx-theme] →
+// createRoot(§7 View law). unmount: root.unmount()(effect cleanup 연쇄).
+export interface PluginViewProvider {
+  mount(container: HTMLElement, ctx: ViewContext): void;
+  unmount?(container: HTMLElement): void;
 }
 
 export interface CommandOutcome {
@@ -246,17 +282,12 @@ export interface HostApi {
       watch: (cb: (key: string | null) => void) => HostDisposable;
     };
   };
-  fs?: {
-    writeText?: (path: string, content: string) => Promise<void>;
-    url?: (path: string) => Promise<string>;
-  };
-  // 코어 app.process 최소 부분집합("process" 권한) — 미리보기 http 서버 스폰(§7 수송).
-  process?: {
-    spawn: (cmd: string, args: string[], opts?: { cwd?: string }) => Promise<number>;
-    onData: (handle: number, cb: (data: Uint8Array) => void) => { dispose(): void };
-    onStderr: (handle: number, cb: (data: Uint8Array) => void) => { dispose(): void };
-    onExit: (handle: number, cb: (code: number) => void) => { dispose(): void };
-    kill: (handle: number) => Promise<void>;
+  // 코어 app.ui 최소 부분집합("ui" 권한) — 캔버스 뷰 등록(§7 View law). 등록은 선언(contributes.views)
+  // 외 거부(§0-3). openView 는 코어 plugin.view.open 위임 sugar(원점 계승) — preview.open 은 핸들러
+  // 안에서 inv.execute("plugin.view.open", …) 를 직접 써 spec §5 유래·상관을 계승한다(§7).
+  ui?: {
+    registerView: (viewId: string, provider: PluginViewProvider) => HostDisposable;
+    openView: (viewId: string, placement?: ViewPlacement) => Promise<CommandOutcome>;
   };
   project: { current: () => { id: string; root: string | null } | null };
 }
@@ -264,6 +295,6 @@ export interface HostApi {
 export interface HostContext {
   app: HostApi;
   manifest: { id: string; version: string };
-  dir: string; // 플러그인 설치 디렉토리(미리보기 아티팩트 기록 루트).
+  dir: string; // 플러그인 설치 디렉토리(코어 제공). v3 는 디스크 아티팩트가 없어 렌더에 미사용 — 향후 확장 여지.
   subscriptions: HostDisposable[];
 }

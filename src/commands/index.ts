@@ -1,7 +1,8 @@
 // 명령 카탈로그(26) — 전부 같은 스토어(DesignDoc)를 조작하는 얇은 래퍼. app.commands.register 로
 // sok CLI/MCP/스킬에 자동 노출된다. 트리 의미(생성/조회/변이/검색/테마)와 페이지 소스는 src/model 이,
-// 카탈로그/템플릿/미리보기/내보내기/문서는 각 서브모듈이 소유한다. 이 파일은 params→서브모듈→봉투
-// 매핑만 한다. 두 페이지 종류(§2): tree(comp.* 편집) / tsx(원본 소스가 진실 — page.code.* 편집).
+// 카탈로그/템플릿/내보내기/문서는 각 서브모듈이 소유한다. 이 파일은 params→서브모듈→봉투 매핑만 한다.
+// preview.* 는 인앱 캔버스 뷰를 연다(inv.execute("plugin.view.open") — §7 View law. 브라우저·아티팩트 없음).
+// 두 페이지 종류(§2): tree(comp.* 편집) / tsx(원본 소스가 진실 — page.code.* 편집).
 //
 // 반환 규약(CONTRACT §4, 코어 normalizeOutcome 확정): 성공 = 평문 데이터 레코드(ok 키 없음, 표시
 // message 는 register spec.message 소유), 실패 = err(code,message[,data])={ok:false,code,message,data?}.
@@ -12,22 +13,16 @@ import {
   COLOR_MODES,
   type Err,
   type CommandOutcome,
-  type DesignPage,
-  type PageSource,
-  type RunnerPage,
-  type DesignPayload,
 } from "../types";
 import { isErr, errMsg, asString, asNonEmptyString } from "./envelope";
 import { resolveThemeMode } from "./theme-mode";
 import { compileGate } from "./compile";
 import type { DesignStore } from "./store";
-import { probeEngine, driveBrowser, type Engine } from "./preview-drive";
 
-// 트리 모델·카탈로그·템플릿·미리보기·내보내기·문서(각 병렬 에이전트 소유 — CONTRACT 시그니처에 맞춘다).
+// 트리 모델·카탈로그·템플릿·내보내기·문서(각 병렬 에이전트 소유 — CONTRACT 시그니처에 맞춘다).
 import * as model from "../model";
 import * as catalog from "../catalog";
 import * as templates from "../templates";
-import * as preview from "../preview";
 import * as exportMod from "../export";
 import * as docs from "../docs";
 
@@ -42,7 +37,7 @@ interface ParamSpec {
   default?: unknown;
 }
 
-// 중첩 실행 컨텍스트(§5) — 다른 플러그인(브라우저) 명령은 반드시 inv.execute 로(유래·상관 계승).
+// 중첩 실행 컨텍스트(§5) — 코어 plugin.view.open 호출은 반드시 inv.execute 로(유래·상관 계승).
 interface Inv {
   execute(name: string, params?: Record<string, unknown>): Promise<CommandOutcome>;
 }
@@ -67,30 +62,11 @@ interface CommandsApi {
   register(name: string, spec: RegisterSpec): { dispose(): void } | (() => void);
 }
 
-interface ProcessApi {
-  spawn: (cmd: string, args: string[], opts?: { cwd?: string }) => Promise<number>;
-  onData: (handle: number, cb: (data: Uint8Array) => void) => { dispose(): void };
-  onExit: (handle: number, cb: (code: number) => void) => { dispose(): void };
-  kill: (handle: number) => Promise<void>;
-}
-interface FsApi {
-  writeText?: (path: string, content: string) => Promise<void>;
-  url?: (path: string) => Promise<string>;
-}
-
 interface Ctx {
   subscriptions: Array<{ dispose(): void } | (() => void)>;
   dir: string;
   manifest: { id: string; version: string };
-  app: { commands?: CommandsApi; fs?: FsApi; process?: ProcessApi };
-}
-
-// 페이지 소스 → 러너 페이로드의 렌더 부분(RunnerPage). 러너는 이 kind 로 두 경로를 가른다(§7):
-// tree 는 root 트리를, tsx 는 code 를 sucrase 로 트랜스폼해 마운트한다. origin 은 러너가 안 본다.
-function toRunnerPage(source: PageSource): RunnerPage {
-  return source.kind === "tsx"
-    ? { kind: "tsx", code: source.code }
-    : { kind: "tree", root: source.root };
+  app: { commands?: CommandsApi };
 }
 
 // ── 등록 ──────────────────────────────────────────────────────────────────────
@@ -129,57 +105,24 @@ export function registerCommands(ctx: Ctx, store: DesignStore): void {
       return r;
     };
 
-  // 미리보기 아티팩트 기록 + 브라우저 구동(preview.open/refresh, theme.set 재사용). action=open 은
-  // 엔진을 새로 탐지하고(진입점), navigate 는 세션에 기록된 엔진을 재사용(없으면 탐지). 성공 시 세션 기록.
-  // 페이로드의 page 는 페이지 소스의 렌더 부분집합(RunnerPage) — tree/tsx 두 경로를 러너로 관통한다(§7).
-  const emitAndDrive = async (
-    inv: Inv,
-    page: DesignPage,
-    action: "open" | "navigate",
-  ): Promise<{ ok: true; url: string; engine: Engine } | Err> => {
-    const fs = ctx.app.fs;
-    if (!fs?.writeText) {
-      return err("PREVIEW_FAILED", "파일 시스템 권한이 없어 미리보기를 기록할 수 없습니다.");
-    }
-    const proc = ctx.app.process;
-    if (!proc?.spawn) {
-      return err("PREVIEW_FAILED", "process 권한이 없어 미리보기 서버를 띄울 수 없습니다.");
-    }
-    const writeText = fs.writeText;
-    const payload: DesignPayload = {
-      theme: store.doc.activeTheme,
-      mode: store.doc.mode ?? "system", // 러너로 관통(§9). 무값은 system.
-      page: toRunnerPage(page.source),
-    };
+  // 캔버스 뷰 열기/포커스(§7 View law) — plugin.view.open 을 inv.execute 로 부른다(유래·상관 계승, §5).
+  // 이 명령은 blocked-for-plugins 아님·cross-plugin 아님·danger 아님이라 "commands" 권한으로 충분하다.
+  // content 배치 결과의 existing(true=기존 탭 포커스)을 opened 로 뒤집어 돌려준다. 비-ok 는 PREVIEW_FAILED.
+  const openCanvas = async (inv: Inv): Promise<{ ok: true; opened: boolean } | Err> => {
+    let out: CommandOutcome;
     try {
-      await preview.writePreview({
-        fs: { writeText: (p, c) => writeText(p, c) },
-        dir: store.dir,
-        pageId: page.id,
-        payload,
+      out = await inv.execute("plugin.view.open", {
+        view: `${pluginId}.canvas`,
+        placement: "content",
       });
     } catch (e) {
-      return err("PREVIEW_FAILED", `미리보기 파일 기록 실패: ${errMsg(e)}`);
+      return err("PREVIEW_FAILED", `캔버스 뷰 열기 실패: ${errMsg(e)}`);
     }
-    // http 수송(§7) — file:// 는 금지 클래스(고유 오리진 fetch 차단·폴리필 무력화). 서버 보장 후 URL 조립.
-    let url: string;
-    try {
-      const port = await preview.ensurePreviewServer({ proc, dir: store.dir, state: store.preview.server });
-      url = preview.previewHttpUrl(port, page.id);
-    } catch (e) {
-      return err("PREVIEW_FAILED", `미리보기 서버 기동 실패: ${errMsg(e)}`);
-    }
-    let engine: Engine | null = action === "navigate" ? store.preview.engine : null;
-    if (!engine) engine = await probeEngine((n, p) => inv.execute(n, p));
-    if (!engine) {
-      return err("DEP_MISSING", "브라우저 플러그인(chromium·native)이 모두 비활성입니다.");
-    }
-    const out = await driveBrowser((n, p) => inv.execute(n, p), engine, action, url);
     if (!out.ok) {
-      return err("PREVIEW_FAILED", `브라우저 구동 실패(${engine}): ${out.message}`);
+      return err("PREVIEW_FAILED", `캔버스 뷰 열기 실패: ${out.message}`);
     }
-    store.preview = { ...store.preview, engine, pageId: page.id, url };
-    return { ok: true, url, engine };
+    // existing=true → 이미 열린 캔버스 탭을 포커스한 것 → opened=false(새 탭 생성 아님).
+    return { ok: true, opened: out.data?.existing !== true };
   };
 
   // ── ping / state(생태계 관례) ────────────────────────────────────────────────
@@ -225,7 +168,7 @@ export function registerCommands(ctx: Ctx, store: DesignStore): void {
     },
     (d) => {
       if (!d.pageId) return [];
-      const preview_ = { cmd: cmd("preview.open"), why: "브라우저 뷰로 미리볼 수 있습니다." };
+      const preview_ = { cmd: cmd("preview.open"), why: "캔버스로 미리볼 수 있습니다." };
       return d.kind === "tsx"
         ? [{ cmd: cmd("page.code.set"), why: "TSX 소스를 교체해 편집할 수 있습니다." }, preview_]
         : [{ cmd: cmd("comp.add"), why: "루트 아래에 컴포넌트를 추가할 수 있습니다." }, preview_];
@@ -299,7 +242,7 @@ export function registerCommands(ctx: Ctx, store: DesignStore): void {
         ? [
             { cmd: cmd("comp.set"), why: "방금 만든 노드의 속성을 갱신할 수 있습니다." },
             { cmd: cmd("comp.add"), why: "그 아래에 자식 컴포넌트를 더 추가할 수 있습니다." },
-            { cmd: cmd("preview.open"), why: "결과를 미리볼 수 있습니다." },
+            { cmd: cmd("preview.open"), why: "결과를 캔버스로 미리볼 수 있습니다." },
           ]
         : [],
   );
@@ -385,7 +328,7 @@ export function registerCommands(ctx: Ctx, store: DesignStore): void {
       d.code !== undefined
         ? [
             { cmd: cmd("page.code.set"), why: "TSX 소스를 교체해 편집할 수 있습니다." },
-            { cmd: cmd("preview.open"), why: "브라우저 뷰로 미리볼 수 있습니다." },
+            { cmd: cmd("preview.open"), why: "캔버스로 미리볼 수 있습니다." },
           ]
         : [],
   );
@@ -417,7 +360,7 @@ export function registerCommands(ctx: Ctx, store: DesignStore): void {
     (d) =>
       d.pageId
         ? [
-            { cmd: cmd("preview.open"), why: "갱신된 페이지를 미리볼 수 있습니다." },
+            { cmd: cmd("preview.open"), why: "갱신된 페이지를 캔버스로 볼 수 있습니다." },
             { cmd: cmd("export.tsx"), why: "이 페이지를 TSX 로 내보낼 수 있습니다." },
           ]
         : [],
@@ -426,10 +369,10 @@ export function registerCommands(ctx: Ctx, store: DesignStore): void {
   // ── theme.* ──────────────────────────────────────────────────────────────────
   add(
     "theme.set",
-    "Set the active theme, and optionally the color mode (light, dark, or system — default system). gothic is dark-only, so {theme:'gothic', mode:'light'} is rejected. When a preview is open, re-emit the artifact with the new theme/mode and navigate the browser (a browser failure does not fail the command; previewRefreshed=false).",
+    "Set the active theme, and optionally the color mode (light, dark, or system — default system). gothic is dark-only, so {theme:'gothic', mode:'light'} is rejected. A mounted canvas view re-renders automatically (store.onChange swaps the shadow host's data-astryx-theme and color-scheme) — there is no browser to drive and no artifact to re-emit.",
     { ko: "테마 설정 변경 스킨 색 모드 다크 라이트" },
-    (d) => `테마 ${d.theme}·모드 ${d.mode} 적용${d.previewRefreshed ? " (미리보기 갱신)" : ""}.`,
-    async (params, inv) => {
+    (d) => `테마 ${d.theme}·모드 ${d.mode} 적용.`,
+    async (params) => {
       const p = params ?? {};
       const themeName = asString(p.theme) ?? "";
       // mode 판정(변이 전) — 형식 위반·gothic 다크전용 위반은 여기서 INVALID_PROP 로 잡아 doc 를 안 더럽힌다.
@@ -439,26 +382,18 @@ export function registerCommands(ctx: Ctx, store: DesignStore): void {
       const r = model.setTheme(store.doc, themeName);
       if (isErr(r)) return r;
       if (mr.explicit) store.doc.mode = mr.effective; // 명시했을 때만 덮어쓴다(무명시면 기존 모드 보존).
+      // persist 가 kv 기록 후 notify 를 발화 → 마운트된 캔버스 뷰가 새 테마·모드로 재렌더(§7 Live law).
       await store.persist();
-      let previewRefreshed = false;
-      if (store.preview.pageId && inv) {
-        const page = model.getPage(store.doc, store.preview.pageId);
-        if (page) {
-          const res = await emitAndDrive(inv, page, "navigate");
-          previewRefreshed = !isErr(res);
-        }
-      }
       return {
         theme: (r as { theme?: string }).theme ?? store.doc.activeTheme,
         mode: mr.effective,
-        previewRefreshed,
       };
     },
     {
       theme: { type: "string", required: true, enum: THEMES, description: "Theme name (one of the 7 packaged themes)." },
       mode: { type: "string", enum: COLOR_MODES, description: "Color mode: light, dark, or system (default). gothic rejects light." },
     },
-    (d) => (d.theme ? [{ cmd: cmd("preview.open"), why: "테마가 적용된 페이지를 미리볼 수 있습니다." }] : []),
+    (d) => (d.theme ? [{ cmd: cmd("preview.open"), why: "테마가 적용된 페이지를 캔버스로 볼 수 있습니다." }] : []),
   );
 
   add(
@@ -536,7 +471,7 @@ export function registerCommands(ctx: Ctx, store: DesignStore): void {
     (d) =>
       d.pageId
         ? [
-            { cmd: cmd("preview.open"), why: "적용된 페이지를 미리볼 수 있습니다." },
+            { cmd: cmd("preview.open"), why: "적용된 페이지를 캔버스로 볼 수 있습니다." },
             { cmd: cmd("page.code.get"), why: "적용된 TSX 소스를 읽을 수 있습니다." },
             { cmd: cmd("export.tsx"), why: "TSX 로 내보낼 수 있습니다." },
           ]
@@ -621,27 +556,30 @@ export function registerCommands(ctx: Ctx, store: DesignStore): void {
     (d) => (d.topic ? [{ cmd: cmd("catalog.doc"), why: "언급된 컴포넌트의 속성 문서를 볼 수 있습니다." }] : []),
   );
 
-  // ── preview.* ────────────────────────────────────────────────────────────────
+  // ── preview.* (인앱 캔버스 뷰 — 아티팩트·브라우저 없음, §7 View law) ────────────
   add(
     "preview.open",
-    "Write the preview artifact for a page (tree or tsx) and drive a browser plugin (chromium preferred, native fallback) to it.",
-    { ko: "미리보기 열기 프리뷰 브라우저 preview" },
-    (d) => `미리보기 열림(${d.engine}).`,
+    "Select a page (tree or tsx) as the canvas's active page, then open or focus the in-app canvas view. Sets the active page before opening so a fresh mount renders it immediately; a mounted view re-renders live. opened is true for a new tab, false when an already-open canvas tab was focused.",
+    { ko: "캔버스 열기 미리보기 프리뷰 preview 뷰" },
+    (d) => `캔버스 열림(페이지 ${d.pageId}).`,
     async (params, inv) => {
       const pageId = asNonEmptyString((params ?? {}).pageId);
       if (!pageId) return err("NOT_FOUND", "pageId 가 필요합니다.");
       const page = model.getPage(store.doc, pageId);
       if (!page) return err("NOT_FOUND", `페이지를 찾을 수 없습니다: '${pageId}'.`);
-      if (!inv) return err("DEP_MISSING", "브라우저 실행 컨텍스트가 없습니다.");
-      const res = await emitAndDrive(inv, page, "open");
+      // 활성 페이지를 먼저 세팅(§5) → 이미 열린 뷰는 즉시 재렌더, 새 마운트는 올바른 페이지를 그린다.
+      store.preview.activePageId = pageId;
+      store.notify();
+      if (!inv) return err("PREVIEW_FAILED", "실행 컨텍스트가 없어 캔버스를 열 수 없습니다.");
+      const res = await openCanvas(inv);
       if (isErr(res)) return res;
-      return { url: res.url, engine: res.engine };
+      return { pageId, opened: res.opened };
     },
-    { pageId: { type: "string", required: true, description: "Page id to preview." } },
+    { pageId: { type: "string", required: true, description: "Page id to render in the canvas." } },
     (d) =>
-      d.url
+      d.pageId
         ? [
-            { cmd: cmd("theme.set"), why: "테마를 바꿔 미리보기를 갱신할 수 있습니다." },
+            { cmd: cmd("theme.set"), why: "테마를 바꾸면 캔버스가 실시간 재렌더됩니다." },
             { cmd: cmd("export.tsx"), why: "이 페이지를 TSX 로 내보낼 수 있습니다." },
           ]
         : [],
@@ -649,21 +587,26 @@ export function registerCommands(ctx: Ctx, store: DesignStore): void {
 
   add(
     "preview.refresh",
-    "Re-write the artifact for the currently-previewed page (or a given pageId) and navigate the browser. Fails when no preview is open.",
-    { ko: "미리보기 갱신 새로고침 refresh 리로드" },
-    (d) => `미리보기 갱신(${d.engine}).`,
-    async (params, inv) => {
+    "Select the active canvas page (a given pageId, or keep the current one) and force a live re-render by firing store.onChange. The view is already live-bound, so this is an explicit re-render nudge, not a navigation. Headless-complete: with no view mounted it is a successful no-op, never a failure.",
+    { ko: "캔버스 재렌더 갱신 새로고침 refresh 리로드" },
+    (d) => `캔버스 재렌더(페이지 ${d.pageId}).`,
+    (params) => {
       const explicit = asNonEmptyString((params ?? {}).pageId);
-      const pageId = explicit ?? store.preview.pageId;
-      if (!pageId) return err("NOT_FOUND", "열린 미리보기가 없습니다.");
-      const page = model.getPage(store.doc, pageId);
-      if (!page) return err("NOT_FOUND", `페이지를 찾을 수 없습니다: '${pageId}'.`);
-      if (!inv) return err("DEP_MISSING", "브라우저 실행 컨텍스트가 없습니다.");
-      const res = await emitAndDrive(inv, page, "navigate");
-      if (isErr(res)) return res;
-      return { url: res.url, engine: res.engine };
+      if (explicit !== undefined) {
+        const page = model.getPage(store.doc, explicit);
+        if (!page) return err("NOT_FOUND", `페이지를 찾을 수 없습니다: '${explicit}'.`);
+        store.preview.activePageId = explicit;
+      } else if (
+        // 미설정이거나 삭제된 페이지를 가리키면 첫 페이지로 정렬(활성 페이지는 문서에 페이지가 있으면 non-null).
+        !store.preview.activePageId ||
+        !model.getPage(store.doc, store.preview.activePageId)
+      ) {
+        store.preview.activePageId = store.doc.pages[0]?.id ?? null;
+      }
+      store.notify(); // 라이브 재렌더 넛지 — 뷰 미마운트면 구독자 0 이라 성공 no-op(헤드리스 완결, §5).
+      return { pageId: store.preview.activePageId };
     },
-    { pageId: { type: "string", description: "Page id to refresh (defaults to the open preview page)." } },
+    { pageId: { type: "string", description: "Page id to make active (defaults to the current active page)." } },
   );
 
   // ── export.tsx ───────────────────────────────────────────────────────────────
