@@ -50,9 +50,9 @@ Error `code` is a closed set: `NOT_FOUND`, `INVALID_TYPE`, `INVALID_PROP`, `INVA
 
 ## Canvas architecture
 
-The primary design surface is an in-app **canvas view** (a plugin view, id `canvas`, opened by the `design-astryx` program from the `+` menu), not a browser document. `preview.open` opens or focuses the canvas tab; there is no http server, no `file://` artifact, and no browser dependency.
+The primary design surface is an in-app **canvas view** (a plugin view, id `canvas`, opened by the `design-astryx` program from the `+` menu), not a browser document. `preview.open` opens or focuses the canvas tab; there is no http server.
 
-The view mounts the active page's Astryx components **directly** as a React tree inside a Shadow DOM in the app webview, live-bound to the same module store the commands mutate — so every command (`comp.*`, `page.*`, `theme.set`, `template.apply`, `page.code.set`) re-renders the active page instantly, with no navigation and no disk emission. The Shadow DOM contains a global CSS reset (the erd precedent): the view injects `reset.css` → `astryx.css` (with `:root` rewritten to `:host`) → all 7 theme blocks into the shadow, and carries the active theme on the shadow-host wrapper via `data-astryx-theme` + `color-scheme`; switching theme or mode swaps those attributes in place.
+The view renders in a **Chromium engine-sidecar surface** (`browser-chromium`, `soksak-sidecar-browser-spec@1`) hosted in **offscreen mode** (docs/SIDECARS.md §8): the engine paints via shared texture into a module-owned layer, and the view's DOM cell keeps every input event — forwarded over the protocol (`mouse`/`wheel`/`key`/`ime`; `src/app/input-forward.ts`, contract-tested). astryx requires CSS anchor positioning (Chrome 125+), which the app webview (WKWebView) lacks — only the rendering engine changes; the model, commands, and persistence stay in plugin JS (headless preserved: everything works from the CLI with no view open). The shell is a static `file://standalone.html` artifact (React, the astryx barrel, the render core, and all theme CSS baked in). Live state flows over the **cefQuery bridge** — no eval, no code strings: the page subscribes once (persistent query) and the host pushes a ViewStore snapshot on every store notify, so every command (`comp.*`, `page.*`, `theme.set`, `template.apply`, `page.code.set`) re-renders the active page instantly; toolbar/tree/inspector interactions come back as `execute` queries into the same command registry the CLI uses.
 
 The view chrome is a three-pane frame dogfooded from Astryx itself (Layout + LayoutPanel + LayoutContent): a **structure** panel (left, ~260px), the canvas (center), and an **inspector** panel (right, ~320px), with a toolbar header above. Every control is a command client (headless and UI stay one truth):
 
@@ -95,7 +95,7 @@ npm test
 npm run build   # gen catalog + templates → build CSS → bundle main.js (esbuild)
 ```
 
-`npm run build` runs, in order, `scripts/gen-catalog.mjs` and `scripts/gen-templates.mjs` (generate `generated/catalog.json` and `generated/templates.json` from `@astryxdesign/core` and `@astryxdesign/cli`), the `build:css` step (`generated/astryx.css` + the 7-theme `generated/theme-css.json`, injected into the canvas shadow), then `build.mjs` (bundle `src` → committed `main.js`; the render core and its libraries are part of `main.js`'s import graph). `generated/` is git-ignored; `main.js` is committed.
+`npm run build` runs, in order, `scripts/gen-catalog.mjs` and `scripts/gen-templates.mjs` (generate `generated/catalog.json` and `generated/templates.json` from `@astryxdesign/core` and `@astryxdesign/cli`), the `build:css` step (`generated/astryx.css` + the 7-theme `generated/theme-css.json`, baked into the standalone shell), then `build.mjs` (bundle `src` → committed `main.js`; the render core and its libraries are part of `main.js`'s import graph). `generated/` is git-ignored; `main.js` is committed.
 
 ## License
 
