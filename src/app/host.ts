@@ -6,6 +6,11 @@
 //   - 앱 상호작용이 {kind:execute,name,params} → 호스트가 명령 실행 후 결과 봉투 응답
 // 셸(도구 껍데기)은 file:// 정적 아티팩트(main.js 동급, 1회 로드·CEF 캐시). 디자인은 절대 파일이 안 되고
 // 스냅샷 데이터로 흘러 앱 안에서 render-core(sucrase→astryx)로 라이브 tsx 렌더된다.
+//
+// 호스팅 모드 = offscreen(SIDECARS.md §8): 엔진이 offscreen 렌더해 모듈 소유 레이어로 present 하고,
+// 이 셀(DOM)이 모든 입력을 소유한다 — 마우스/휠은 리스너로, 키보드/한글 조합은 숨김 편집 프록시의
+// 네이티브 IME(composition 이벤트)로 받아 프로토콜 메시지(mouse/wheel/key/ime)로 포워딩한다.
+// 엔진 커서는 cursor 이벤트로 돌아와 셀 CSS cursor 에 미러링된다.
 import type { DesignStore } from "../commands/store";
 
 // 코어 app.sidecar.open 반환(browser-chromium host.ts 동형). 코어는 이 메시지 의미를 모른다(맹목 relay).
@@ -167,6 +172,9 @@ export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarVie
     void send({ type: "query-reply", queryId, success: true, response: JSON.stringify(outcome), keep: false });
   }
 
+  // 서피스 id → 셀 컨테이너 — cursor 이벤트 미러링 대상 조회(offscreen 은 네이티브 커서가 없다).
+  const containerById = new Map<number, HTMLElement>();
+
   // 쿼리 릴레이 — 앱 page 의 cefQuery → 브리지 event:"query". 사이드카 핸들당 1회 배선.
   let relayReady = false;
   async function ensureRelay(): Promise<void> {
@@ -188,6 +196,128 @@ export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarVie
       const queryId = p.queryId as number;
       if (typeof queryId === "number") subscribers.delete(queryId);
     });
+    h.on("cursor", (p) => {
+      const el = typeof p.id === "number" ? containerById.get(p.id) : undefined;
+      if (el) el.style.cursor = String(p.type ?? "default");
+    });
+  }
+
+  // ── 입력 포워딩(스펙 §8) — offscreen 셀은 hitTest 에 안 뚫리므로 DOM 이 모든 입력을 받는다 ────
+  // 마우스 좌표는 표면-로컬 CSS px(엔진 DIP 와 동일 단위). move 는 rAF 로 코얼레싱(최신만 전송).
+  function modsOf(e: MouseEvent | KeyboardEvent): number {
+    return (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.metaKey ? 8 : 0);
+  }
+  function inputForwarder(container: HTMLElement, id: number): () => void {
+    const pt = (e: MouseEvent): { x: number; y: number } => {
+      const r = container.getBoundingClientRect();
+      return { x: Math.round(e.clientX - r.left), y: Math.round(e.clientY - r.top) };
+    };
+
+    // 숨김 편집 프록시 — 키보드·한글 조합의 수신처. 앱 웹뷰의 네이티브 IME(NSTextInputClient)가
+    // 조합을 만들고, composition 이벤트를 ime 메시지로 브리지한다(합성 키 이벤트 금지 — 스펙 §8).
+    const proxy = document.createElement("input");
+    proxy.type = "text";
+    proxy.setAttribute("aria-hidden", "true");
+    proxy.style.cssText =
+      "position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;border:0;padding:0;pointer-events:none;";
+    container.appendChild(proxy);
+
+    // mousemove 코얼레싱 — 이벤트 레이트(120Hz+)를 프레임당 1회로 줄인다(최신만 유효).
+    let moveRaf = 0;
+    let lastMove: { x: number; y: number; mods: number } | null = null;
+    const flushMove = (): void => {
+      moveRaf = 0;
+      if (!lastMove) return;
+      const m = lastMove;
+      lastMove = null;
+      void send({ type: "mouse", id, kind: "move", x: m.x, y: m.y, mods: m.mods });
+    };
+    const onMove = (e: MouseEvent): void => {
+      lastMove = { ...pt(e), mods: modsOf(e) };
+      if (!moveRaf) moveRaf = requestAnimationFrame(flushMove);
+    };
+    const onDown = (e: MouseEvent): void => {
+      e.preventDefault(); // 앱 웹뷰의 텍스트 선택/포커스 이동 차단 — 입력의 주인은 표면.
+      proxy.focus({ preventScroll: true }); // 키보드·조합 수신처 확보.
+      const p = pt(e);
+      void send({ type: "focus", id });
+      void send({
+        type: "mouse", id, kind: "down", x: p.x, y: p.y,
+        button: e.button === 1 ? 1 : e.button === 2 ? 2 : 0,
+        clicks: Math.max(1, e.detail), mods: modsOf(e),
+      });
+    };
+    const onUp = (e: MouseEvent): void => {
+      const p = pt(e);
+      void send({
+        type: "mouse", id, kind: "up", x: p.x, y: p.y,
+        button: e.button === 1 ? 1 : e.button === 2 ? 2 : 0,
+        clicks: Math.max(1, e.detail), mods: modsOf(e),
+      });
+    };
+    const onWheel = (e: WheelEvent): void => {
+      e.preventDefault(); // 앱 웹뷰 스크롤 차단 — 델타는 표면으로(부호 변환은 엔진 소유).
+      const p = pt(e);
+      void send({ type: "wheel", id, x: p.x, y: p.y, dx: Math.round(e.deltaX), dy: Math.round(e.deltaY) });
+    };
+    const onContext = (e: MouseEvent): void => e.preventDefault();
+
+    // 키보드 — 조합 중(229/isComposing)은 IME 경로가 소유하므로 key 포워딩을 건너뛴다.
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      const mods = modsOf(e);
+      void send({ type: "key", id, kind: "down", code: e.keyCode, mods });
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+        void send({ type: "key", id, kind: "char", code: e.keyCode, char: e.key, mods });
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent): void => {
+      if (e.isComposing || e.keyCode === 229) return;
+      void send({ type: "key", id, kind: "up", code: e.keyCode, mods: modsOf(e) });
+    };
+    // 한글 조합 브리지 — WKWebView 네이티브 IME 의 조합 상태를 그대로 전달(조합 중 백스페이스·재조합은
+    // compositionupdate 의 짧아진 text 로 자연 반영된다). caret 은 JS 문자열 인덱스(UTF-16) = 엔진 단위.
+    const onCompStart = (): void => {
+      void send({ type: "ime", id, kind: "set", text: "", caret: 0 });
+    };
+    const onCompUpdate = (e: CompositionEvent): void => {
+      const text = e.data ?? "";
+      void send({ type: "ime", id, kind: "set", text, caret: text.length });
+    };
+    const onCompEnd = (e: CompositionEvent): void => {
+      const text = e.data ?? "";
+      proxy.value = ""; // 프록시 잔여값 청소 — 다음 조합의 오염 방지.
+      if (text) void send({ type: "ime", id, kind: "commit", text });
+      else void send({ type: "ime", id, kind: "cancel" });
+    };
+    const onBlur = (): void => {
+      void send({ type: "ime", id, kind: "finish" }); // 포커스 이탈 — 미완 조합을 확정.
+    };
+
+    container.addEventListener("mousemove", onMove);
+    container.addEventListener("mousedown", onDown);
+    container.addEventListener("mouseup", onUp);
+    container.addEventListener("wheel", onWheel, { passive: false });
+    container.addEventListener("contextmenu", onContext);
+    proxy.addEventListener("keydown", onKeyDown);
+    proxy.addEventListener("keyup", onKeyUp);
+    proxy.addEventListener("compositionstart", onCompStart);
+    proxy.addEventListener("compositionupdate", onCompUpdate);
+    proxy.addEventListener("compositionend", onCompEnd);
+    proxy.addEventListener("blur", onBlur);
+    containerById.set(id, container);
+
+    return () => {
+      containerById.delete(id);
+      if (moveRaf) cancelAnimationFrame(moveRaf);
+      container.removeEventListener("mousemove", onMove);
+      container.removeEventListener("mousedown", onDown);
+      container.removeEventListener("mouseup", onUp);
+      container.removeEventListener("wheel", onWheel);
+      container.removeEventListener("contextmenu", onContext);
+      proxy.remove();
+    };
   }
 
   // store 변이 → 구독자 전원에 스냅샷 push(§7 Live law). 명령이 store.persist/notify 를 태우면 여기로 온다.
@@ -285,7 +415,14 @@ export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarVie
 
       void (async () => {
         const r = measureRect(container);
-        const out = await send({ type: "create", x: r.x, y: r.y, w: r.w, h: r.h, url: shellUrl });
+        // offscreen 모드(스펙 §8) — 엔진이 모듈 소유 레이어로 present, 이 셀이 입력을 소유한다.
+        const out = await send({
+          type: "create",
+          mode: "offscreen",
+          scale: window.devicePixelRatio || 1,
+          x: r.x, y: r.y, w: r.w, h: r.h,
+          url: shellUrl,
+        });
         const id = out && typeof out.id === "number" ? (out.id as number) : null;
         if (id == null) {
           console.warn("[design] 서피스 생성 실패");
@@ -299,9 +436,11 @@ export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarVie
         }
         trackSurface(viewId, id); // 영속(reload 넘어 유령 회수용).
         const stop = hostSurface(container, id);
+        const stopInput = inputForwarder(container, id);
         mounts.set(container, {
           id,
           dispose: () => {
+            stopInput();
             stop();
             untrackSurface(viewId);
             void send({ type: "close", id });

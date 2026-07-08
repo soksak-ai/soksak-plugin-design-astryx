@@ -37731,6 +37731,7 @@ function createSidecarView(deps) {
     const outcome = exec ? await exec(`plugin.${pluginId}.${name}`, params) : { ok: false, code: "INTERNAL", message: "commands.execute unavailable" };
     void send({ type: "query-reply", queryId, success: true, response: JSON.stringify(outcome), keep: false });
   }
+  const containerById = /* @__PURE__ */ new Map();
   let relayReady = false;
   async function ensureRelay() {
     if (relayReady) return;
@@ -37751,6 +37752,123 @@ function createSidecarView(deps) {
       const queryId = p.queryId;
       if (typeof queryId === "number") subscribers.delete(queryId);
     });
+    h.on("cursor", (p) => {
+      const el = typeof p.id === "number" ? containerById.get(p.id) : void 0;
+      if (el) el.style.cursor = String(p.type ?? "default");
+    });
+  }
+  function modsOf(e) {
+    return (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.metaKey ? 8 : 0);
+  }
+  function inputForwarder(container, id) {
+    const pt = (e) => {
+      const r = container.getBoundingClientRect();
+      return { x: Math.round(e.clientX - r.left), y: Math.round(e.clientY - r.top) };
+    };
+    const proxy = document.createElement("input");
+    proxy.type = "text";
+    proxy.setAttribute("aria-hidden", "true");
+    proxy.style.cssText = "position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;border:0;padding:0;pointer-events:none;";
+    container.appendChild(proxy);
+    let moveRaf = 0;
+    let lastMove = null;
+    const flushMove = () => {
+      moveRaf = 0;
+      if (!lastMove) return;
+      const m = lastMove;
+      lastMove = null;
+      void send({ type: "mouse", id, kind: "move", x: m.x, y: m.y, mods: m.mods });
+    };
+    const onMove = (e) => {
+      lastMove = { ...pt(e), mods: modsOf(e) };
+      if (!moveRaf) moveRaf = requestAnimationFrame(flushMove);
+    };
+    const onDown = (e) => {
+      e.preventDefault();
+      proxy.focus({ preventScroll: true });
+      const p = pt(e);
+      void send({ type: "focus", id });
+      void send({
+        type: "mouse",
+        id,
+        kind: "down",
+        x: p.x,
+        y: p.y,
+        button: e.button === 1 ? 1 : e.button === 2 ? 2 : 0,
+        clicks: Math.max(1, e.detail),
+        mods: modsOf(e)
+      });
+    };
+    const onUp = (e) => {
+      const p = pt(e);
+      void send({
+        type: "mouse",
+        id,
+        kind: "up",
+        x: p.x,
+        y: p.y,
+        button: e.button === 1 ? 1 : e.button === 2 ? 2 : 0,
+        clicks: Math.max(1, e.detail),
+        mods: modsOf(e)
+      });
+    };
+    const onWheel = (e) => {
+      e.preventDefault();
+      const p = pt(e);
+      void send({ type: "wheel", id, x: p.x, y: p.y, dx: Math.round(e.deltaX), dy: Math.round(e.deltaY) });
+    };
+    const onContext = (e) => e.preventDefault();
+    const onKeyDown = (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      const mods = modsOf(e);
+      void send({ type: "key", id, kind: "down", code: e.keyCode, mods });
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+        void send({ type: "key", id, kind: "char", code: e.keyCode, char: e.key, mods });
+      }
+    };
+    const onKeyUp = (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      void send({ type: "key", id, kind: "up", code: e.keyCode, mods: modsOf(e) });
+    };
+    const onCompStart = () => {
+      void send({ type: "ime", id, kind: "set", text: "", caret: 0 });
+    };
+    const onCompUpdate = (e) => {
+      const text = e.data ?? "";
+      void send({ type: "ime", id, kind: "set", text, caret: text.length });
+    };
+    const onCompEnd = (e) => {
+      const text = e.data ?? "";
+      proxy.value = "";
+      if (text) void send({ type: "ime", id, kind: "commit", text });
+      else void send({ type: "ime", id, kind: "cancel" });
+    };
+    const onBlur = () => {
+      void send({ type: "ime", id, kind: "finish" });
+    };
+    container.addEventListener("mousemove", onMove);
+    container.addEventListener("mousedown", onDown);
+    container.addEventListener("mouseup", onUp);
+    container.addEventListener("wheel", onWheel, { passive: false });
+    container.addEventListener("contextmenu", onContext);
+    proxy.addEventListener("keydown", onKeyDown);
+    proxy.addEventListener("keyup", onKeyUp);
+    proxy.addEventListener("compositionstart", onCompStart);
+    proxy.addEventListener("compositionupdate", onCompUpdate);
+    proxy.addEventListener("compositionend", onCompEnd);
+    proxy.addEventListener("blur", onBlur);
+    containerById.set(id, container);
+    return () => {
+      containerById.delete(id);
+      if (moveRaf) cancelAnimationFrame(moveRaf);
+      container.removeEventListener("mousemove", onMove);
+      container.removeEventListener("mousedown", onDown);
+      container.removeEventListener("mouseup", onUp);
+      container.removeEventListener("wheel", onWheel);
+      container.removeEventListener("contextmenu", onContext);
+      proxy.remove();
+    };
   }
   const unsubStore = store.subscribe(() => {
     for (const q of subscribers) pushSnapshot(q);
@@ -37826,7 +37944,16 @@ function createSidecarView(deps) {
       container.style.overflow = "hidden";
       void (async () => {
         const r = measureRect(container);
-        const out = await send({ type: "create", x: r.x, y: r.y, w: r.w, h: r.h, url: shellUrl });
+        const out = await send({
+          type: "create",
+          mode: "offscreen",
+          scale: window.devicePixelRatio || 1,
+          x: r.x,
+          y: r.y,
+          w: r.w,
+          h: r.h,
+          url: shellUrl
+        });
         const id = out && typeof out.id === "number" ? out.id : null;
         if (id == null) {
           console.warn("[design] \uC11C\uD53C\uC2A4 \uC0DD\uC131 \uC2E4\uD328");
@@ -37839,9 +37966,11 @@ function createSidecarView(deps) {
         }
         trackSurface(viewId, id);
         const stop = hostSurface(container, id);
+        const stopInput = inputForwarder(container, id);
         mounts.set(container, {
           id,
           dispose: () => {
+            stopInput();
             stop();
             untrackSurface(viewId);
             void send({ type: "close", id });
