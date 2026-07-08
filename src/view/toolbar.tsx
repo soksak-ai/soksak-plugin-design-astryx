@@ -3,7 +3,7 @@
 //   3) 캔버스 컨트롤(뷰포트 폭·배경) → 뷰-로컬 프레이밍(문서 아님·비영속·창마다 독립).
 // astryx 컴포넌트를 도그푸딩한다(Toolbar/Selector — 배럴 직접 import, main.js 그래프에 번들됨).
 import type { ReactElement } from "react";
-import { Toolbar, Selector } from "@astryxdesign/core";
+import { Toolbar, Selector, SegmentedControl, SegmentedControlItem } from "@astryxdesign/core";
 import {
   COLOR_MODES,
   THEMES,
@@ -52,7 +52,6 @@ export function CanvasToolbar({
 
   const pageOptions = doc.pages.map((p) => ({ value: p.id, label: p.name }));
   const themeOptions = THEMES.map((t) => ({ value: t, label: t }));
-  const modeOptions = COLOR_MODES.map((m) => ({ value: m, label: m }));
   const widthOptions = VIEWPORT_WIDTHS.map((w) => ({
     value: widthValue(w),
     label: w === "fill" ? "Fill" : String(w),
@@ -61,7 +60,6 @@ export function CanvasToolbar({
   const pageSelector = (
     <Selector
       label="Page"
-      data-node="page"
       isLabelHidden
       size="sm"
       placeholder="No pages"
@@ -75,7 +73,6 @@ export function CanvasToolbar({
   const themeSelector = (
     <Selector
       label="Theme"
-      data-node="theme"
       isLabelHidden
       size="sm"
       options={themeOptions}
@@ -84,34 +81,35 @@ export function CanvasToolbar({
     />
   );
 
+  // 모드·뷰포트는 인라인 SegmentedControl(골 다이어그램의 [◐ light/dark/sys]·[fill·1280·768·375]).
+  // 팝오버가 없어 앵커 포지셔닝 버그가 원천 소멸하고, 사람이 세그먼트를 바로 클릭한다(드롭다운 없음). LLM 제어는 theme.set·canvas.set 명령.
   const modeSelector = (
-    <Selector
+    <SegmentedControl
       label="Mode"
-      data-node="mode"
-      isLabelHidden
       size="sm"
-      options={modeOptions}
       value={mode}
-      onChange={(m: string) => void applyTheme(execute, doc.activeTheme, m as ColorMode)}
-    />
+      onChange={(m: string) => void applyTheme(execute, doc.activeTheme, m as ColorMode)}>
+      {COLOR_MODES.map((m) => (
+        <SegmentedControlItem key={m} value={m} label={m} />
+      ))}
+    </SegmentedControl>
   );
 
   const widthSelector = (
-    <Selector
+    <SegmentedControl
       label="Width"
-      data-node="width"
-      isLabelHidden
       size="sm"
-      options={widthOptions}
       value={widthValue(controls.width)}
-      onChange={(v: string) => setControls({ ...controls, width: parseWidth(v) })}
-    />
+      onChange={(v: string) => setControls({ ...controls, width: parseWidth(v) })}>
+      {widthOptions.map((o) => (
+        <SegmentedControlItem key={o.value} value={o.value} label={o.label} />
+      ))}
+    </SegmentedControl>
   );
 
   const backgroundSelector = (
     <Selector
       label="Background"
-      data-node="background"
       isLabelHidden
       size="sm"
       options={BACKGROUND_PRESETS}
