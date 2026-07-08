@@ -8,11 +8,15 @@ import { createRoot } from "react-dom/client";
 import type { CommandOutcome, DesignNode, DesignPage } from "../types";
 import {
   buildStructureItems,
+  buildCurrentPageRoot,
+  activeTemplateId,
   propHint,
   activeSelectedNodeId,
   TSX_ROW_ID,
+  NO_PAGE_ROW_ID,
   TreePanel,
 } from "./tree-panel";
+import type { TemplateRef } from "./browser";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -108,6 +112,41 @@ describe("buildStructureItems", () => {
   });
 });
 
+describe("buildCurrentPageRoot", () => {
+  it("페이지 없음 → 안내 한 행을 든 Current Page 루트(빈 화면 금지)", () => {
+    const root = buildCurrentPageRoot(null, null, () => {});
+    expect(root.id).toBe("current-page");
+    expect(root.label).toBe("Current Page");
+    expect(root.children).toHaveLength(1);
+    expect(root.children![0].id).toBe(NO_PAGE_ROW_ID);
+    expect(root.children![0].isDisabled).toBe(true);
+  });
+  it("트리 페이지 → 이름 라벨 + 구조를 자식으로", () => {
+    const root = buildCurrentPageRoot(treePage(node("r", "Stack", {}, [node("b", "Button", {})]), "pg"), null, () => {});
+    expect(root.label).toBe("Current Page — pg");
+    expect(root.children![0].id).toBe("r");
+    expect(root.children![0].children![0].label).toBe("Button");
+  });
+  it("노드 클릭 콜백은 buildStructureItems 를 통해 이어진다", () => {
+    const onSelect = vi.fn();
+    const root = buildCurrentPageRoot(treePage(node("r", "Stack", {}, [node("b", "Button", {})]), "pg"), null, onSelect);
+    root.children![0].children![0].onClick!();
+    expect(onSelect).toHaveBeenCalledWith("b");
+  });
+});
+
+describe("activeTemplateId", () => {
+  it("tsx 페이지의 origin 이 활성 템플릿 id(pathname 대체)", () => {
+    const p: DesignPage = { id: "p", name: "p", source: { kind: "tsx", code: "x", origin: "pages/dashboard" } };
+    expect(activeTemplateId(p)).toBe("pages/dashboard");
+  });
+  it("origin 없는 tsx·tree 페이지·null → null", () => {
+    expect(activeTemplateId({ id: "p", name: "p", source: { kind: "tsx", code: "x" } })).toBeNull();
+    expect(activeTemplateId(treePage(node("r", "Stack")))).toBeNull();
+    expect(activeTemplateId(null)).toBeNull();
+  });
+});
+
 describe("TreePanel", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
@@ -153,5 +192,43 @@ describe("TreePanel", () => {
       leaf!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(execute).toHaveBeenCalledWith("canvas.select", { pageId: "pg", nodeId: "btn" });
+  });
+
+  it("발견 섹션 — Templates 루트·검색 버튼을 함께 그린다(구조 + 발견 한 패널)", () => {
+    const templates: TemplateRef[] = [{ id: "pages/dashboard", kind: "page", name: "Dashboard", available: true }];
+    const container = mount(
+      createElement(TreePanel, {
+        page: null,
+        selectedNodeId: null,
+        execute: async () => ({ ok: true, code: "OK", message: "" }) as CommandOutcome,
+        templates,
+        components: [],
+      }),
+    );
+    expect(container.textContent).toContain("Templates");
+    expect(container.textContent).toContain("Dashboard");
+    expect(container.textContent).toContain("검색");
+  });
+
+  it("발견 리프 클릭 → template.apply({id}) 를 execute 로 라우팅", () => {
+    const templates: TemplateRef[] = [{ id: "pages/dashboard", kind: "page", name: "Dashboard", available: true }];
+    const execute = vi.fn(async () => ({ ok: true, code: "OK", message: "" }) as CommandOutcome);
+    const container = mount(
+      createElement(TreePanel, {
+        page: null,
+        selectedNodeId: null,
+        execute,
+        templates,
+        components: [],
+      }),
+    );
+    const leaf = [...container.querySelectorAll<HTMLElement>("*")].find(
+      (e) => e.children.length === 0 && e.textContent?.trim() === "Dashboard",
+    );
+    expect(leaf).toBeTruthy();
+    act(() => {
+      leaf!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(execute).toHaveBeenCalledWith("template.apply", { id: "pages/dashboard" });
   });
 });

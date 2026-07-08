@@ -161,7 +161,7 @@ describe("CanvasApp — 3-패널 프레임 통합", () => {
     expect(viewport.style.background).toBe("red");
   });
 
-  it("TSX 내보내기 → export.tsx 결과를 shadow 안 선택 가능 오버레이(textarea)로 띄운다", async () => {
+  it("TSX 내보내기 → export.tsx 결과를 astryx CodeBlock 오버레이로 낮춘다(코드·파일명 실물 렌더)", async () => {
     const execute = vi.fn(async (name: string): Promise<CommandOutcome> => {
       if (name === "export.tsx") {
         return { ok: true, code: "OK", message: "", data: { tsx: "EXPORTED_CODE", filename: "page.tsx" } };
@@ -177,10 +177,33 @@ describe("CanvasApp — 3-패널 프레임 통합", () => {
       btn!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(execute).toHaveBeenCalledWith("export.tsx", { pageId: "pg" });
-    const area = container.querySelector("textarea.export-code") as HTMLTextAreaElement;
-    expect(area).toBeTruthy();
-    expect(area.value).toBe("EXPORTED_CODE");
-    expect(container.querySelector(".export-overlay")!.textContent).toContain("page.tsx");
+    // 크루드 textarea 폐기 → CodeBlock(<pre>)이 코드 본문을 낮춘다. 파일명은 헤더 라벨로.
+    const overlay = container.querySelector(".export-overlay") as HTMLElement;
+    expect(overlay).toBeTruthy();
+    expect(overlay.querySelector("pre")).toBeTruthy();
+    expect(overlay.textContent).toContain("EXPORTED_CODE");
+    expect(overlay.textContent).toContain("page.tsx");
+    expect(container.querySelector("textarea")).toBeNull();
+  });
+
+  it("TSX 내보내기 실패 → EmptyState 오류 표면(빈 화면·코드 블록 없음)", async () => {
+    const execute = vi.fn(async (name: string): Promise<CommandOutcome> => {
+      if (name === "export.tsx") {
+        return { ok: false, code: "ERR_EXPORT", message: "직렬화에 실패했습니다." };
+      }
+      return { ok: true, code: "OK", message: "" };
+    });
+    const { container } = mount(makeStore(), execute);
+    const btn = [...container.querySelectorAll<HTMLElement>("button")].find(
+      (b) => b.textContent?.includes("TSX 내보내기"),
+    );
+    await act(async () => {
+      btn!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const overlay = container.querySelector(".export-overlay") as HTMLElement;
+    expect(overlay).toBeTruthy();
+    expect(overlay.textContent).toContain("직렬화에 실패했습니다.");
+    expect(overlay.querySelector("pre")).toBeNull();
   });
 
   it("페이지가 없으면 캔버스는 안내 표면(빈 화면 금지)", () => {
