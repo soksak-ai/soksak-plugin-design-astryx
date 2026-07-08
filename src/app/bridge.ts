@@ -39,7 +39,8 @@ export function execute(name: string, params?: Record<string, unknown>): Promise
         try {
           resolve(JSON.parse(r) as CommandOutcome);
         } catch {
-          resolve({ ok: true }); // 파싱 실패해도 성공 응답이면 ok(방어)
+          // 파싱 실패해도 성공 응답이면 ok(방어) — 봉투 규약({ok,code,message})을 지켜 반환.
+          resolve({ ok: true, code: "OK", message: "non-JSON success response" });
         }
       },
       onFailure: (code, msg) => resolve({ ok: false, code: "BRIDGE_FAIL", message: `${code} ${msg}` }),
