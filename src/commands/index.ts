@@ -456,13 +456,21 @@ export function registerCommands(ctx: Ctx, store: DesignStore): void {
         );
       }
       const pageId = asNonEmptyString(p.pageId);
-      return pageId
+      const r = pageId
         ? model.applyTsxSource(store.doc, { pageId, code: t.code, origin: id })
         : model.createTsxPage(store.doc, {
             name: asNonEmptyString(p.name) ?? t.name,
             code: t.code,
             origin: id,
           });
+      // 적용한 페이지를 활성으로 전환한다 — 안 그러면 새 페이지가 뒤에서 생기기만 하고 캔버스는 옛
+      // 페이지를 계속 그려 "클릭해도 아무 변경 없음" 으로 보인다(브라우저에서 템플릿 클릭 시 실측 버그).
+      // preview.open 과 동형: activePageId 세팅 + notify 로 마운트된 뷰가 즉시 새 페이지를 그린다.
+      if (!isErr(r)) {
+        store.preview.activePageId = r.pageId;
+        store.notify();
+      }
+      return r;
     }),
     {
       id: { type: "string", required: true, description: "Shipped template id (e.g. pages/dashboard)." },
