@@ -50,7 +50,10 @@ export function execute(name: string, params?: Record<string, unknown>): Promise
 
 // 스냅샷 구독(host→page, persistent). 호스트가 모델 변이마다 ViewStore 스냅샷을 push → onSnapshot 콜.
 // 반환=구독 해제(cefQueryCancel). 미가용이면 no-op 해제.
-export function subscribeSnapshots(onSnapshot: (snapshot: unknown) => void): () => void {
+export function subscribeSnapshots(
+  onSnapshot: (snapshot: unknown) => void,
+  onError?: (code: number, message: string) => void,
+): () => void {
   if (!hasBridge()) return () => {};
   const id = window.cefQuery!({
     request: JSON.stringify({ kind: "subscribe" }),
@@ -62,8 +65,9 @@ export function subscribeSnapshots(onSnapshot: (snapshot: unknown) => void): () 
         /* 잘못된 스냅샷은 무시(이전 상태 유지) */
       }
     },
-    onFailure: () => {
-      /* 구독 실패(브라우저 파괴 등) — 렌더는 마지막 스냅샷 유지 */
+    onFailure: (code, message) => {
+      // 구독 실패(브라우저 파괴·핸들러 부재) — 조용히 삼키지 않고 표면화한다.
+      onError?.(code, message);
     },
   });
   return () => {
