@@ -14,7 +14,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
 } from "react";
-import { Button } from "@astryxdesign/core";
+import { Button, EmptyState } from "@astryxdesign/core";
 import {
   freshCanvasControls,
   type CanvasControls,
@@ -36,6 +36,7 @@ import { CanvasToolbar } from "./toolbar";
 import { CanvasFrame, ThemeScope } from "./frame";
 import { TreePanel, activeSelectedNodeId } from "./tree-panel";
 import { Inspector } from "./inspector";
+import { CodeOverlay } from "./code-view";
 
 // 뷰가 읽는 확장 스토어 표면 — model.CanvasStore(doc·preview)에 뷰-세션(selection·canvasControls)을
 // 얹는다. 둘 다 선택적(?): 최소 store(헤드리스·테스트)도 방어 기본값으로 마운트되게(null 선택·fresh 프레임).
@@ -135,8 +136,8 @@ export function CanvasApp({
     void execute("canvas.set", { viewport: next.width, background: next.background });
   }
 
-  // TSX 내보내기(§7 Export presentation law) — export.tsx 결과를 shadow 안 선택 가능 오버레이로 띄운다.
-  // 클립보드 권한이 없어(§8) 원클릭 복사는 없다: 사용자가 전체 선택 후 복사한다(핀).
+  // TSX 내보내기(§7 Export presentation law) — export.tsx 결과를 shadow 안 CodeOverlay(astryx CodeBlock)로
+  // 띄운다(Meta PreviewShell Code view 이식). 코드/오류만 소유하고 표면 렌더는 code-view 가 낮춘다.
   const [exportText, setExportText] = useState<string | null>(null);
   const [exportErr, setExportErr] = useState<string | null>(null);
   const [exportFilename, setExportFilename] = useState<string>("");
@@ -213,12 +214,10 @@ export function CanvasApp({
             <NodeBoundary label={`page ${page.id}`}>{renderPage(page, render)}</NodeBoundary>
           </div>
         ) : (
-          <div
-            className="canvas-empty"
-            style={{ font: "13px/1.5 system-ui, sans-serif", opacity: 0.6, padding: 24 }}
-          >
-            No pages yet — create one with page.create or template.apply.
-          </div>
+          <EmptyState
+            title="No pages yet"
+            description="create one with page.create or template.apply."
+          />
         )}
       </div>
     </ThemeScope>
@@ -262,74 +261,12 @@ export function CanvasApp({
       </ThemeScope>
 
       {exportOpen && (
-        <div
-          className="export-overlay"
-          style={{
-            position: "absolute",
-            inset: 0,
-            zIndex: 50,
-            display: "flex",
-            flexDirection: "column",
-            background: "rgba(15,15,17,0.97)",
-            color: "#e5e7eb",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "8px 12px",
-              borderBottom: "1px solid #333",
-              font: "12px system-ui, sans-serif",
-            }}
-          >
-            <span style={{ fontWeight: 600 }}>
-              TSX 내보내기{exportFilename ? ` — ${exportFilename}` : ""}
-            </span>
-            <span style={{ opacity: 0.7 }}>전체 선택 후 복사하세요.</span>
-            <button
-              type="button"
-              onClick={closeExport}
-              style={{
-                marginLeft: "auto",
-                font: "12px system-ui, sans-serif",
-                color: "#e5e7eb",
-                background: "transparent",
-                border: "1px solid #555",
-                borderRadius: 4,
-                padding: "2px 10px",
-                cursor: "pointer",
-              }}
-            >
-              닫기
-            </button>
-          </div>
-          {exportErr ? (
-            <div style={{ padding: 16, color: "#fca5a5", font: "12px/1.5 ui-monospace, monospace" }}>
-              {exportErr}
-            </div>
-          ) : (
-            <textarea
-              className="export-code"
-              readOnly
-              value={exportText ?? ""}
-              spellCheck={false}
-              style={{
-                flex: "1 1 auto",
-                width: "100%",
-                border: "none",
-                resize: "none",
-                padding: 12,
-                boxSizing: "border-box",
-                font: "12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace",
-                background: "transparent",
-                color: "inherit",
-                outline: "none",
-              }}
-            />
-          )}
-        </div>
+        <CodeOverlay
+          code={exportText}
+          error={exportErr}
+          filename={exportFilename}
+          onClose={closeExport}
+        />
       )}
     </div>
   );

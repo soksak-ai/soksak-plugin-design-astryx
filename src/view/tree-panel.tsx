@@ -1,11 +1,22 @@
-// 구조 패널(§7 Chrome law·Selection law) — 활성 페이지의 노드 트리를 astryx TreeList 로 투영한다.
-// 트리 페이지: source.root 를 재귀로 낮춰 노드마다 한 행(type + 짧은 prop 힌트). tsx 페이지: 노드가
-// 없으니(§2) '⌁ code' 한 행(읽기 전용 안내). 노드 클릭 = canvas.select 명령(세 진입점 수렴, 스토어 직접
-// 변이 금지 §7). 선택은 isSelected 로 하이라이트한다 — 캔버스 아웃라인과 같은 selection 필드가 진실.
+// 구조 + 발견 패널(§7 Chrome law·Selection law) — 한 사이드 패널에 세 표면을 얹는다: (1) Current Page =
+// 활성 페이지 노드 트리(구조 편집·선택, 기존 buildStructureItems), (2)(3) Templates·Components 발견 트리 +
+// 검색 팔레트(browser-panel 이 소유). Meta PreviewShell 은 두 발견 루트(Pages·Components)만 뒀지만 우리는
+// 편집 표면(Current Page)이 있어 세 번째 섹션으로 함께 둔다. 노드 클릭 = canvas.select(세 진입점 수렴,
+// 스토어 직접 변이 금지 §7); 발견 리프·팔레트 = template.apply/comp.add(browser-panel 이 라우팅).
 import type { ReactElement } from "react";
 import { TreeList } from "@astryxdesign/core";
 import type { DesignNode, DesignPage, Selection } from "../types";
+import { listTemplates } from "../templates";
+import * as catalog from "../catalog";
 import type { ExecuteCommand } from "./model";
+import { BrowserPanel } from "./browser-panel";
+import {
+  toComponentRef,
+  type ComponentRef,
+  type DispatchContext,
+  type NavItem,
+  type TemplateRef,
+} from "./browser";
 
 // 활성 페이지에 유효한 선택 노드(순수, §7 Selection law) — 선택이 활성 페이지에 속할 때만 그 nodeId,
 // 아니면 null. 스토어가 persist 시 죽은 노드를 정리하므로(reconcileSelection) 여기선 페이지 소속만 본다.
@@ -18,21 +29,10 @@ export function activeSelectedNodeId(
   return selection.pageId === activePageId ? selection.nodeId : null;
 }
 
-// TreeList items 의 구조적 부분집합(TreeListItemData 가 배럴 미export 라 우리가 쓰는 필드만 선언).
-// 구조적 호환이라 TreeList 의 items 로 그대로 넘어간다. children 재귀로 트리 깊이를 담는다.
-export interface StructureItem {
-  id: string;
-  label: string;
-  description?: string;
-  isSelected?: boolean;
-  isExpanded?: boolean;
-  isDisabled?: boolean;
-  onClick?: () => void;
-  children?: StructureItem[];
-}
-
 // tsx 페이지의 단일 코드 행 id(고정) — 실제 노드 id 가 아니라 표시용 안내 행. 클릭 불가(읽기 전용).
 export const TSX_ROW_ID = "__tsx_code__";
+// 페이지 없음 안내 행 id(Current Page 루트 아래) — 빈 화면 대신 담백한 한 행.
+export const NO_PAGE_ROW_ID = "__no_page__";
 
 // 문자열 절단(순수) — prop 힌트가 트리 행을 넘치지 않게.
 function truncate(s: string, n = 24): string {
@@ -59,7 +59,7 @@ export function buildStructureItems(
   page: DesignPage | null,
   selNodeId: string | null,
   onSelect: (nodeId: string) => void,
-): StructureItem[] {
+): NavItem[] {
   if (!page) return [];
   if (page.source.kind === "tsx") {
     return [
@@ -71,7 +71,7 @@ export function buildStructureItems(
       },
     ];
   }
-  const walk = (node: DesignNode): StructureItem => {
+  const walk = (node: DesignNode): NavItem => {
     const hint = propHint(node);
     return {
       id: node.id,
@@ -86,32 +86,82 @@ export function buildStructureItems(
   return [walk(page.source.root)];
 }
 
+// Current Page 루트(순수) — 활성 페이지 구조를 한 루트 아래로 묶는다(발견 루트와 나란한 세 번째 섹션).
+// 페이지가 없으면 담백한 안내 한 행(빈 화면 금지). 항상 펼침.
+export function buildCurrentPageRoot(
+  page: DesignPage | null,
+  selNodeId: string | null,
+  onSelect: (nodeId: string) => void,
+): NavItem {
+  const items = buildStructureItems(page, selNodeId, onSelect);
+  return {
+    id: "current-page",
+    label: page ? `Current Page — ${page.name}` : "Current Page",
+    isExpanded: true,
+    children:
+      items.length > 0
+        ? items
+        : [{ id: NO_PAGE_ROW_ID, label: "페이지가 없습니다.", isDisabled: true }],
+  };
+}
+
+// 활성 템플릿 id(순수) — Meta pathname 대체. 적용된 tsx 페이지의 origin 이 곧 현재 보는 템플릿이다
+// (template.apply 가 origin 을 기록). tree 페이지·origin 없음은 null(하이라이트 없음).
+export function activeTemplateId(page: DesignPage | null): string | null {
+  if (page && page.source.kind === "tsx") return page.source.origin ?? null;
+  return null;
+}
+
+// 발견 데이터 글루 — 빌드 define(templates/catalog)에서 browser.ts 빌더 입력으로 낮춘다. define 없는
+// 환경(vitest)에선 빈 목록으로 폴백한다(모듈 typeof 가드) — 순수 빌더 검증은 browser.test 가 실데이터로 친다.
+function defaultTemplates(): TemplateRef[] {
+  return listTemplates().templates.map((t) => ({
+    id: t.id,
+    kind: t.kind,
+    name: t.name,
+    available: t.available,
+  }));
+}
+function defaultComponents(): ComponentRef[] {
+  return catalog.types().map((type) => toComponentRef(type, catalog.getEntry(type)));
+}
+
 export interface TreePanelProps {
   page: DesignPage | null;
   selectedNodeId: string | null;
   execute: ExecuteCommand;
+  templates?: readonly TemplateRef[]; // 발견 데이터(생략 시 빌드 define 에서). 테스트가 명시 주입.
+  components?: readonly ComponentRef[];
 }
 
-// 구조 패널 컴포넌트 — 노드 클릭을 canvas.select 로 잇고(§7 All-elements clause), TreeList 로 그린다.
-// 페이지가 없으면 담백한 안내(빈 화면 금지). 헤드리스에서도 같은 selection 필드가 진실이라 클릭·명령이 수렴.
-export function TreePanel({ page, selectedNodeId, execute }: TreePanelProps): ReactElement {
-  const items = buildStructureItems(page, selectedNodeId, (nodeId) => {
+// 구조 + 발견 패널 컴포넌트 — Current Page 구조 트리(노드 클릭 → canvas.select)와 발견 패널(Templates·
+// Components + 검색)을 세로로 얹는다. 발견 라우팅(template.apply/comp.add)은 browser-panel 소유.
+export function TreePanel({
+  page,
+  selectedNodeId,
+  execute,
+  templates,
+  components,
+}: TreePanelProps): ReactElement {
+  const currentPageRoot = buildCurrentPageRoot(page, selectedNodeId, (nodeId) => {
     if (page) void execute("canvas.select", { pageId: page.id, nodeId });
   });
 
-  if (items.length === 0) {
-    return (
-      <div style={{ font: "12px/1.5 system-ui, sans-serif", opacity: 0.6, padding: 8 }}>
-        페이지가 없습니다.
-      </div>
-    );
-  }
+  const dispatchCtx: DispatchContext = {
+    activeTreePageId: page && page.source.kind === "tree" ? page.id : null,
+    selectedNodeId,
+  };
 
   return (
-    <TreeList
-      density="compact"
-      items={items}
-      data-testid="structure-tree"
-    />
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 0 }}>
+      <TreeList density="compact" items={[currentPageRoot]} data-testid="structure-tree" />
+      <BrowserPanel
+        templates={templates ?? defaultTemplates()}
+        components={components ?? defaultComponents()}
+        activeId={activeTemplateId(page)}
+        dispatchCtx={dispatchCtx}
+        execute={execute}
+      />
+    </div>
   );
 }
