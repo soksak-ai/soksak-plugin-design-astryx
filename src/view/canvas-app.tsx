@@ -170,6 +170,7 @@ export function CanvasApp({
       </div>
       <Button
         label="TSX 내보내기"
+        data-node="export"
         size="sm"
         variant="secondary"
         onClick={() => void openExport()}

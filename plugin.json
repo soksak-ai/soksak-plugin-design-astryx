@@ -250,6 +250,36 @@
     ],
     "skill": {
       "path": "skill/SKILL.md"
-    }
+    },
+    "nodes": [
+      {
+        "id": "page",
+        "description": "페이지 선택 드롭다운"
+      },
+      {
+        "id": "theme",
+        "description": "테마 선택 드롭다운(7종)"
+      },
+      {
+        "id": "mode",
+        "description": "색 모드 드롭다운(light/dark/system)"
+      },
+      {
+        "id": "width",
+        "description": "뷰포트 폭 드롭다운(fill/1280/768/375)"
+      },
+      {
+        "id": "background",
+        "description": "캔버스 배경 드롭다운"
+      },
+      {
+        "id": "export",
+        "description": "TSX 내보내기 버튼"
+      },
+      {
+        "id": "search",
+        "description": "발견 검색 버튼(CommandPalette 열기)"
+      }
+    ]
   }
 }

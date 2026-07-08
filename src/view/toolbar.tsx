@@ -61,6 +61,7 @@ export function CanvasToolbar({
   const pageSelector = (
     <Selector
       label="Page"
+      data-node="page"
       isLabelHidden
       size="sm"
       placeholder="No pages"
@@ -74,6 +75,7 @@ export function CanvasToolbar({
   const themeSelector = (
     <Selector
       label="Theme"
+      data-node="theme"
       isLabelHidden
       size="sm"
       options={themeOptions}
@@ -85,6 +87,7 @@ export function CanvasToolbar({
   const modeSelector = (
     <Selector
       label="Mode"
+      data-node="mode"
       isLabelHidden
       size="sm"
       options={modeOptions}
@@ -96,6 +99,7 @@ export function CanvasToolbar({
   const widthSelector = (
     <Selector
       label="Width"
+      data-node="width"
       isLabelHidden
       size="sm"
       options={widthOptions}
@@ -107,6 +111,7 @@ export function CanvasToolbar({
   const backgroundSelector = (
     <Selector
       label="Background"
+      data-node="background"
       isLabelHidden
       size="sm"
       options={BACKGROUND_PRESETS}
