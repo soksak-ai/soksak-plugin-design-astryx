@@ -35,7 +35,6 @@ export interface RenderConfig {
   controlledInputs: ReadonlySet<string>; // 트리 경로 정적 목업 입력 법칙 집합(카탈로그 파생).
   astryxCss: string; // reset+astryx.css 병합 원문(:root→:host 재작성해 shadow 주입).
   themeCssMap: Record<string, string>; // 7 테마 theme.css(:root→:host 재작성해 전부 shadow 주입, §9).
-  polyfill?: (shadow?: ShadowRoot) => void; // 앵커 포지셔닝 폴백(§7). shadow root 를 스캔 대상에 포함.
 }
 
 // 뷰 팩토리 입력. store/execute 는 plugin-entry 가, render 는 프로덕션(render-modules)/테스트가 준다.

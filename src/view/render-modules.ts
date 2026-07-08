@@ -21,7 +21,6 @@ import * as HeroiconsOutline24 from "@heroicons/react/24/outline";
 import * as HeroiconsSolid24 from "@heroicons/react/24/solid";
 import * as HeroiconsSolid20 from "@heroicons/react/20/solid";
 import * as Lucide from "lucide-react";
-import anchorPolyfill from "@oddbird/css-anchor-positioning/fn";
 import type { Context } from "react";
 import type { RunnerModules } from "../render-core";
 import * as catalog from "../catalog";
@@ -89,29 +88,8 @@ function controlledInputs(): ReadonlySet<string> {
   return deriveControlledInputs(entries);
 }
 
-// 앵커 포지셔닝 폴백(§7 Anchor polyfill law) — 앱 문서 1회, 네이티브 미지원시에만. 폴백은 인라인
-// <style> 를 innerHTML 로 읽어(fetch 없음) 인앱에서 완전 동작. core 는 앵커 CSS 를 안 써 문서 전역
-// 패스가 core 엔 inert. 실패는 렌더를 죽이지 않는다(위치만 근사).
-let anchorRan = false;
-function maybePolyfillAnchor(shadow?: ShadowRoot): void {
-  if (anchorRan) return;
-  anchorRan = true;
-  try {
-    const supported =
-      typeof CSS !== "undefined" &&
-      typeof CSS.supports === "function" &&
-      CSS.supports("anchor-name", "--x");
-    if (supported) return; // 네이티브 지원 → 0 비용.
-    // roots=[document, shadow] — 앵커 스타일·엘리먼트가 shadow 안에 있고, 팝오버는 top-layer(문서)로
-    // 승격되므로 둘 다 스캔해야 한다(shadow 만 주면 top-layer 팝오버를 놓친다). 폴리필 타입은 root 를
-    // Document|HTMLElement 로만 선언하나 런타임은 querySelectorAll 만 호출하므로 ShadowRoot 도 동작한다
-    // (타입 미선언일 뿐 — 캐스트로 넘긴다).
-    const roots = (shadow ? [document, shadow] : [document]) as unknown as HTMLElement[];
-    void anchorPolyfill({ useAnimationFrame: true, roots });
-  } catch {
-    // 폴백 실패는 미리보기를 죽이지 않는다.
-  }
-}
+// 앵커 포지셔닝 폴백은 mount(anchor-fallback.installAnchorFallback)로 이전했다 — @oddbird 폴리필은
+// shadow+top-layer 팝오버를 못 잡는 것을 실측(폴리필 실행 후에도 top:0,left:0)해 legacy 제거했다.
 
 // 프로덕션 RenderConfig — buildCanvasView 에 넣는다.
 export function productionRenderConfig(): RenderConfig {
@@ -123,6 +101,5 @@ export function productionRenderConfig(): RenderConfig {
     controlledInputs: controlledInputs(),
     astryxCss: astryxCss(),
     themeCssMap: themeCssMap(),
-    polyfill: maybePolyfillAnchor,
   };
 }
