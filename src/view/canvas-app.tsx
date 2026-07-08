@@ -248,6 +248,9 @@ export function CanvasApp({
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
+        // 불투명 배경 — 캔버스 콘텐츠(예: ChatComposer 의 backdrop-filter: blur)가 뒤를 흐릴 때, shadow host
+        // 가 투명하면 앱 배경(떨어지는 벚꽃)이 비쳐 흐려진다. 불투명 base 로 앱 배경 유입을 막는다(§7).
+        background: "var(--color-background-body)",
       }}
     >
       {/* 크롬 스코프 — neutral 테마(nested). Layout·툴바·트리·인스펙터가 문서 테마와 무관하게 neutral. */}
