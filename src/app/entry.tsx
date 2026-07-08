@@ -39,7 +39,11 @@ const seed = (globalThis as { __DESIGN_SNAPSHOT__?: unknown }).__DESIGN_SNAPSHOT
 if (seed) remote.set(seed);
 
 // 호스트가 push 하는 스냅샷 → 원격 스토어 갱신 → version 증가 → CanvasApp 재렌더.
-subscribeSnapshots((snap) => remote.set(snap));
+// 구독 실패는 조용히 삼키지 않는다 — 브리지 불통은 콘솔에 표면화(침묵 강등 금지).
+subscribeSnapshots(
+  (snap) => remote.set(snap),
+  (code, message) => console.warn(`[design] 스냅샷 구독 실패(${code}): ${message}`),
+);
 
 const el = document.getElementById("root");
 if (el) {
