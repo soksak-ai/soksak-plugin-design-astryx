@@ -9,10 +9,9 @@
 // 선행: `npm run gen`(catalog·templates·docs) → `npm run build:css`(astryx.css·theme-css.json) → 이 빌드.
 //       package.json build 스크립트가 순서를 강제한다. 생성물이 없으면 throw(침묵 폴백 금지 — 부분 산출은 잘못된 계약).
 import { build, context } from "esbuild";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { rewriteRootToHost } from "./scripts/css-rewrite.mjs";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const GEN = path.resolve(root, "generated");
@@ -47,25 +46,80 @@ function controlledInputTypes(catalog) {
 }
 
 async function buildDefines() {
-  const [catalog, templates, astryxCss, themeCssMap] = await Promise.all([
+  const [catalog, templates] = await Promise.all([
     readGen("catalog.json"),
     readGen("templates.json"),
-    readGen("astryx.css"), // reset.css + dist/astryx.css 병합(build:css 산출, 원문 :root).
-    readGen("theme-css.json"), // { "<theme>": "<theme.css 원문>" }(build:css 산출).
   ]);
   const controlled = controlledInputTypes(JSON.parse(catalog));
-  // shadow 주입용 :root→:host 재작성 — astryx.css 통짜, 테마 맵은 값마다(§7·§12).
-  const astryxCssHost = rewriteRootToHost(astryxCss);
-  const themeMapHost = Object.fromEntries(
-    Object.entries(JSON.parse(themeCssMap)).map(([name, css]) => [name, rewriteRootToHost(css)]),
-  );
+  // CSS 정의(__ASTRYX_CSS__/__THEME_CSS_MAP__) 폐기 — 뷰가 Chromium 사이드카 서피스로 이전해 main.js
+  // 는 더는 CSS 를 주입하지 않는다(shadow :root→:host 재작성도 소멸). standalone 앱이 원문 :root CSS 를
+  // generated/ 에서 직접 읽어 HTML 에 인라인한다(buildStandalone). render-modules 가 참조하던 define 은
+  // typeof 가드로 "" 폴백(무해).
   return {
     __CATALOG_JSON__: JSON.stringify(catalog), // 이미 JSON 문자열 → 문자열 리터럴로 한 번 더 감싼다.
     __TEMPLATES_JSON__: JSON.stringify(templates),
-    __ASTRYX_CSS__: JSON.stringify(astryxCssHost), // 재작성된 CSS 원문 문자열(소비측이 그대로 주입).
-    __THEME_CSS_MAP__: JSON.stringify(JSON.stringify(themeMapHost)), // JSON 문자열(소비측이 JSON.parse).
     __CONTROLLED_INPUT_TYPES__: JSON.stringify(controlled), // string[] 리터럴(소비측이 Set 으로).
   };
+}
+
+// <script>/<style> 종료 시퀀스 이스케이프 — minify 된 JS/CSS 문자열에 </script>·</style> 가 들어가면
+// 태그가 조기 종료된다. JS 문자열·CSS 안에선 <\/ 도 동일 의미라 무해하게 치환한다.
+function escInline(s, tag) {
+  return s.replace(new RegExp(`</${tag}`, "gi"), `<\\/${tag}`);
+}
+
+// 두 번째 타깃 — 사이드카(browser-chromium, CEF 149=anchor 네이티브) 서피스에 file:// 로 로드되는
+// 자기완결 standalone.html. 앱 엔트리(src/app/entry.tsx)를 IIFE 로 번들(file:// 에서 ESM/CORS 회피)해
+// 원문 :root CSS(재작성 없음 — 실 document 라 :root 가 <html> 에 바인딩)와 함께 한 파일로 인라인한다.
+// 성능: 정적 자산(React·astryx·catalog·테마)만 굽고, 호스트 전용 templates(1.5MB)·docs 는 제외한다
+// (앱은 스냅샷을 그릴 뿐 템플릿/문서를 안 읽는다). 시드(generated/standalone-snapshot.json)는 선택 —
+// 없으면 빈 뷰어(호스트가 cefQuery 로 붙어 스냅샷 push).
+async function buildStandalone(defines) {
+  const [astryxCss, themeMapRaw, seedJson] = await Promise.all([
+    readGen("astryx.css"), // 원문 :root(build:css 산출) — 재작성 안 함.
+    readGen("theme-css.json").then(JSON.parse),
+    readFile(path.join(GEN, "standalone-snapshot.json"), "utf8").catch(() => "null"),
+  ]);
+  const css = [astryxCss, ...Object.values(themeMapRaw)].join("\n");
+
+  const result = await build({
+    entryPoints: ["src/app/entry.tsx"],
+    bundle: true,
+    format: "iife", // 자기실행 — import/export 없음 → file:// 에서 CORS/모듈 문제 회피.
+    platform: "browser",
+    target: "es2022",
+    jsx: "automatic",
+    jsxImportSource: "react",
+    define: {
+      "process.env.NODE_ENV": '"production"',
+      "import.meta.env.DEV": "false",
+      __CATALOG_JSON__: defines.__CATALOG_JSON__, // 실 카탈로그 — 트리 렌더 레지스트리·인스펙터 스키마.
+      __TEMPLATES_JSON__: JSON.stringify("[]"), // 앱 불요(호스트 전용) — 1.5MB 제외(성능).
+      __ASTRYX_CSS__: '""', // CSS 는 HTML 래퍼가 주입 — CanvasApp 은 이 define 을 안 읽는다.
+      __THEME_CSS_MAP__: JSON.stringify("{}"),
+      __CONTROLLED_INPUT_TYPES__: "[]", // render-modules 가 카탈로그에서 런타임 파생(이 define 미사용).
+    },
+    outfile: "app.js",
+    write: false, // 인라인 위해 캡처.
+    minify: true, // HTML 인라인 → 크기 최소화.
+    legalComments: "none",
+    logLevel: "info",
+  });
+  const bundle = result.outputFiles[0].text;
+
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>html,body,#root{height:100%;margin:0;background:var(--color-background-body)}</style>
+<style>${escInline(css, "style")}</style>
+</head><body>
+<div id="root"></div>
+<script>window.__DESIGN_SNAPSHOT__=${escInline(seedJson, "script")};</script>
+<script>${escInline(bundle, "script")}</script>
+</body></html>`;
+
+  await writeFile(path.resolve(root, "standalone.html"), html, "utf8");
+  console.log(`[design-astryx] built standalone.html (${html.length}B, bundle ${bundle.length}B)`);
 }
 
 async function main() {
@@ -92,11 +146,13 @@ async function main() {
   if (process.argv.includes("--watch")) {
     const ctx = await context(opts);
     await ctx.watch();
+    await buildStandalone(defines); // watch 는 main.js 만 추종 — standalone 은 초기 1회(재빌드는 node build.mjs).
     console.log("[design-astryx] watching src → main.js …");
   } else {
     await build(opts);
     const { size } = await stat(path.resolve(root, "main.js"));
     console.log(`[design-astryx] built main.js (${size}B)`);
+    await buildStandalone(defines); // 두 번째 타깃 — Chromium 서피스용 자기완결 뷰어.
   }
 }
 

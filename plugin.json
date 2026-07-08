@@ -16,7 +16,24 @@
     "ui",
     "commands",
     "data",
-    "programs"
+    "programs",
+    "sidecar"
+  ],
+  "sidecars": [
+    {
+      "name": "browser-chromium",
+      "interface": "soksak-sidecar-browser-spec",
+      "reach": {
+        "fetch": {
+          "url": {
+            "darwin": "https://github.com/soksak-ai/soksak-sidecar-browser-chromium/releases/download/v0.0.1/soksak-sidecar-browser-chromium-0.0.1-darwin-arm64.tar.gz"
+          },
+          "sha256": {
+            "darwin": "88c14e79d11821f9efc9f8c139370c7a5cf3288771bda437b1f7bc596e7dc8fc"
+          }
+        }
+      }
+    }
   ],
   "contributes": {
     "views": [
@@ -30,7 +47,8 @@
         "placements": [
           "content"
         ],
-        "defaultPlacement": "content"
+        "defaultPlacement": "content",
+        "transparent": true
       }
     ],
     "programs": [

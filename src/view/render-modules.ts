@@ -88,10 +88,10 @@ function controlledInputs(): ReadonlySet<string> {
   return deriveControlledInputs(entries);
 }
 
-// 앵커 포지셔닝 폴백은 mount(anchor-fallback.installAnchorFallback)로 이전했다 — @oddbird 폴리필은
-// shadow+top-layer 팝오버를 못 잡는 것을 실측(폴리필 실행 후에도 top:0,left:0)해 legacy 제거했다.
+// 앵커 포지셔닝 폴백·@oddbird 폴리필은 전부 legacy 제거했다 — 뷰가 Chromium 서피스(CEF 149)로
+// 이전해 CSS anchor positioning 이 네이티브 지원되므로 팝오버가 폴백 없이 정확히 뜬다.
 
-// 프로덕션 RenderConfig — buildCanvasView 에 넣는다.
+// 프로덕션 RenderConfig — standalone 앱 엔트리(app/entry.tsx)가 CanvasApp 에 넣는다.
 export function productionRenderConfig(): RenderConfig {
   return {
     modules: RUNNER_MODULES,

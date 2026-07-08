@@ -248,9 +248,8 @@ export function CanvasApp({
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
-        // 불투명 배경 — 캔버스 콘텐츠(예: ChatComposer 의 backdrop-filter: blur)가 뒤를 흐릴 때, shadow host
-        // 가 투명하면 앱 배경(떨어지는 벚꽃)이 비쳐 흐려진다. 불투명 base 로 앱 배경 유입을 막는다(§7).
-        background: "var(--color-background-body)",
+        // 배경은 문서 body(standalone HTML 래퍼)가 소유한다 — Chromium 서피스는 실 document 라 패널
+        // 배경은 워크어라운드가 아니라 document 배경. shadow 앱 배경 유입 우회는 소멸(엔진 이전).
       }}
     >
       {/* 크롬 스코프 — neutral 테마(nested). Layout·툴바·트리·인스펙터가 문서 테마와 무관하게 neutral. */}
