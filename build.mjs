@@ -75,12 +75,21 @@ function escInline(s, tag) {
 // (앱은 스냅샷을 그릴 뿐 템플릿/문서를 안 읽는다). 시드(generated/standalone-snapshot.json)는 선택 —
 // 없으면 빈 뷰어(호스트가 cefQuery 로 붙어 스냅샷 push).
 async function buildStandalone(defines) {
-  const [astryxCss, themeMapRaw, seedJson] = await Promise.all([
+  const [astryxCss, themeMapRaw, seedJson, templatesRaw] = await Promise.all([
     readGen("astryx.css"), // 원문 :root(build:css 산출) — 재작성 안 함.
     readGen("theme-css.json").then(JSON.parse),
     readFile(path.join(GEN, "standalone-snapshot.json"), "utf8").catch(() => "null"),
+    readGen("templates.json"),
   ]);
   const css = [astryxCss, ...Object.values(themeMapRaw)].join("\n");
+
+  // 발견 패널(Templates·Components)은 앱 안에서 619 템플릿을 나열한다 — id/kind/name/available/requires
+  // 메타만 필요하다. code 본문(1.44MB→105KB)은 벗긴다: template.apply 는 호스트가 실행하고(main.js 가
+  // 풀 code 보유) 앱은 클릭 시 execute 만 릴레이하므로 앱은 code 를 결코 쓰지 않는다. 메타는 남겨야
+  // 발견 패널이 온전히 뜬다(제외했더니 Templates·Components 가 빈 회귀를 교정).
+  const templatesMeta = JSON.stringify(
+    JSON.parse(templatesRaw).map(({ code, ...meta }) => meta),
+  );
 
   const result = await build({
     entryPoints: ["src/app/entry.tsx"],
@@ -94,7 +103,7 @@ async function buildStandalone(defines) {
       "process.env.NODE_ENV": '"production"',
       "import.meta.env.DEV": "false",
       __CATALOG_JSON__: defines.__CATALOG_JSON__, // 실 카탈로그 — 트리 렌더 레지스트리·인스펙터 스키마.
-      __TEMPLATES_JSON__: JSON.stringify("[]"), // 앱 불요(호스트 전용) — 1.5MB 제외(성능).
+      __TEMPLATES_JSON__: JSON.stringify(templatesMeta), // 발견 목록용 메타만(code 제외, 105KB).
       __ASTRYX_CSS__: '""', // CSS 는 HTML 래퍼가 주입 — CanvasApp 은 이 define 을 안 읽는다.
       __THEME_CSS_MAP__: JSON.stringify("{}"),
       __CONTROLLED_INPUT_TYPES__: "[]", // render-modules 가 카탈로그에서 런타임 파생(이 define 미사용).
