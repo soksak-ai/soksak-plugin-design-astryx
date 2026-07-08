@@ -44,9 +44,12 @@ export function BrowserPanel({
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   // 트리 리프 클릭 = template.apply(browser.ts 의 두-루트 트리가 이 콜백을 리프에 심는다).
-  const tree = buildDiscoveryTree(templates, activeId, (id) => {
-    void execute("template.apply", { id });
-  });
+  // 메모이즈 — 619 항목 트리를 매 notify 마다 재생성하면 느리다. templates·activeId 가 바뀔 때만 재빌드
+  // (execute 는 안정 prop). 팔레트 소스와 동일 정책.
+  const tree = useMemo(
+    () => buildDiscoveryTree(templates, activeId, (id) => void execute("template.apply", { id })),
+    [templates, activeId, execute],
+  );
 
   // 팔레트 검색 소스(Meta createStaticSource) — 컴포넌트 + 템플릿. 입력이 안 바뀌면 재생성 안 함.
   const searchSource = useMemo(() => {

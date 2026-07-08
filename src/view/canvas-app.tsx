@@ -8,6 +8,7 @@
 // canvas.set, 내보내기=export.tsx — 스토어 직접 변이 없음.
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -50,10 +51,10 @@ type ViewStore = CanvasStore & {
 // tree 는 배럴 레지스트리로 트리를 낮춘다. 트리 경로는 nodeIdAttr 를 켜 각 노드 DOM 에 data-node-id 를
 // 실어 캔버스 클릭·선택 아웃라인이 노드를 역매핑하게 한다(§7 Selection law). 둘 다 실패는 빈 화면이
 // 아니라 보이는 오류 표면(렌더 코어 소유).
-function renderPage(page: DesignPage, render: RenderConfig): ReactElement {
-  if (page.source.kind === "tsx") {
-    return renderTsx(page.source.code, render.modules);
-  }
+// 트리 페이지 렌더(순수, 저렴 — createElement 매핑). 모델이 트리를 in-place 변이하므로(splice) 매 렌더
+// 새로 그려야 정확하다. tsx 렌더는 sucrase 컴파일이 비싸 CanvasApp 에서 code 로 메모이즈한다(아래).
+function renderTreePage(page: DesignPage, render: RenderConfig): ReactElement | null {
+  if (page.source.kind !== "tree") return null;
   const registry = render.modules.core as Record<string, unknown>;
   return renderNode(page.source.root, registry, {
     controlledInputs: render.controlledInputs,
@@ -89,6 +90,15 @@ export function CanvasApp({
   const theme = doc.activeTheme;
   const mode = effectiveMode(doc.mode, theme);
   const page = activePage(store);
+
+  // tsx 컴파일 메모이즈(성능·상태보존) — sucrase 변환+실행은 비싸다. 매 notify(변이)마다 재컴파일하면
+  // 왕복이 ~1초로 느려지고 매번 새 컴포넌트 트리라 리마운트(타이머·상태 소실)된다. code 문자열이 바뀔
+  // 때만(page.code.set·template.apply) 재컴파일한다. 트리 페이지는 renderTreePage 로 매 렌더(저렴·정확).
+  const tsxCode = page && page.source.kind === "tsx" ? page.source.code : null;
+  const tsxRendered = useMemo(
+    () => (tsxCode != null ? renderTsx(tsxCode, render.modules) : null),
+    [tsxCode, render],
+  );
 
   // 프레이밍(§7 Toolbar law) — 스토어의 뷰-세션이 진실(canvas.set·툴바가 수렴). 없으면 fresh 로 방어.
   const controls = store.canvasControls ?? freshCanvasControls();
@@ -212,7 +222,9 @@ export function CanvasApp({
             onClick={onCanvasClick}
             style={{ ...widthStyle(controls.width), margin: "0 auto" }}
           >
-            <NodeBoundary label={`page ${page.id}`}>{renderPage(page, render)}</NodeBoundary>
+            <NodeBoundary label={`page ${page.id}`}>
+              {page.source.kind === "tsx" ? tsxRendered : renderTreePage(page, render)}
+            </NodeBoundary>
           </div>
         ) : (
           <EmptyState
