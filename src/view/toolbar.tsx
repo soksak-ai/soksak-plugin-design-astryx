@@ -3,7 +3,7 @@
 //   3) 캔버스 컨트롤(뷰포트 폭·배경) → 뷰-로컬 프레이밍(문서 아님·비영속·창마다 독립).
 // astryx 컴포넌트를 도그푸딩한다(Toolbar/Selector — 배럴 직접 import, main.js 그래프에 번들됨).
 import type { ReactElement } from "react";
-import { Toolbar, Selector, SegmentedControl, SegmentedControlItem } from "@astryxdesign/core";
+import { Toolbar, Selector } from "@astryxdesign/core";
 import {
   COLOR_MODES,
   THEMES,
@@ -81,30 +81,29 @@ export function CanvasToolbar({
     />
   );
 
-  // 모드·뷰포트는 인라인 SegmentedControl(골 다이어그램의 [◐ light/dark/sys]·[fill·1280·768·375]).
-  // 팝오버가 없어 앵커 포지셔닝 버그가 원천 소멸하고, 사람이 세그먼트를 바로 클릭한다(드롭다운 없음). LLM 제어는 theme.set·canvas.set 명령.
+  // 모드·뷰포트는 진짜 Selector 드롭다운(theme·page·background 와 일관). 캔버스가 Chromium 서피스로
+  // 이전해 CSS anchor positioning 이 네이티브 지원되므로 팝오버가 트리거 아래 정확히 뜬다 — WKWebView
+  // 우회로 쓰던 인라인 SegmentedControl 은 소멸. LLM 제어는 theme.set·canvas.set 명령.
   const modeSelector = (
-    <SegmentedControl
+    <Selector
       label="Mode"
+      isLabelHidden
       size="sm"
+      options={COLOR_MODES.map((m) => ({ value: m, label: m }))}
       value={mode}
-      onChange={(m: string) => void applyTheme(execute, doc.activeTheme, m as ColorMode)}>
-      {COLOR_MODES.map((m) => (
-        <SegmentedControlItem key={m} value={m} label={m} />
-      ))}
-    </SegmentedControl>
+      onChange={(m: string) => void applyTheme(execute, doc.activeTheme, m as ColorMode)}
+    />
   );
 
   const widthSelector = (
-    <SegmentedControl
+    <Selector
       label="Width"
+      isLabelHidden
       size="sm"
+      options={widthOptions}
       value={widthValue(controls.width)}
-      onChange={(v: string) => setControls({ ...controls, width: parseWidth(v) })}>
-      {widthOptions.map((o) => (
-        <SegmentedControlItem key={o.value} value={o.value} label={o.label} />
-      ))}
-    </SegmentedControl>
+      onChange={(v: string) => setControls({ ...controls, width: parseWidth(v) })}
+    />
   );
 
   const backgroundSelector = (

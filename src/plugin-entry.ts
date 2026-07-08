@@ -1,18 +1,17 @@
 // soksak-plugin-design-astryx 엔트리 — 로더가 blob-URL 로 import 하는 단일 ESM(esbuild 번들).
-// 이 플러그인은 인앱 캔버스 뷰를 기여한다(§1·§7 View law): Astryx 컴포넌트를 앱 웹뷰의 Shadow DOM 에
-// 직접 마운트하고 같은 모듈 스토어에 라이브 바인딩한다. 헤드리스 엔진이기도 하다 — 모든 편집이 명령이라
-// 뷰 미오픈에도 sok CLI/MCP/스킬로 전부 동작한다. 활성화가 하는 일은: 스토어 구성(즉시) → 카탈로그
-// 소스 등록 → 명령 26개 등록(즉시) → 캔버스 뷰 provider 등록("ui" 권한, 표면 있을 때만) → 문서
-// 하이드레이트(비동기, 등록을 안 막음 — E2E 적재 경쟁 제거). 문서는 app.data.kv 에 프로젝트별 영속(§11).
+// 이 플러그인은 캔버스 뷰를 기여한다(§1·§7 View law): 뷰는 browser-chromium 사이드카(CEF 149, CSS
+// anchor positioning 네이티브)에서 standalone.html(앱 껍데기)을 렌더하고 cefQuery 로 스냅샷 push/명령
+// 릴레이한다(app/host.ts). 헤드리스 엔진이기도 하다 — 모든 편집이 명령이라 뷰 미오픈에도 sok CLI/MCP/
+// 스킬로 전부 동작한다. 활성화가 하는 일은: 스토어 구성(즉시) → 카탈로그 소스 등록 → 명령 등록(즉시) →
+// 사이드카 뷰 provider 등록("ui" 권한, 표면 있을 때만) → 문서 하이드레이트(비동기, 등록을 안 막음).
+// 문서는 app.data.kv 에 프로젝트별 영속(§11).
 //
-// 뷰↔명령 라이브 바인딩(§7 Live law): createCanvasView 에 store 와 execute 를 주입한다. execute 는
-// 툴바가 이 플러그인 명령(theme.set·preview.refresh)을 인프로세스로 태우는 통로다(짧은 명령명에
-// plugin.<id>. 접두를 채운다). store.subscribe(view.notify) 로 재렌더를 배선한다 — 어떤 변이 명령이든
-// store.persist/notify 가 구독자를 발화 → view.notify → useSyncExternalStore 재렌더. 스토어를 먼저
-// 만들고 뷰가 그 스토어를 받은 뒤 subscribe 로 배선하므로 store↔view 순환이 없다(erd 동형).
+// 뷰↔명령 라이브 바인딩(§7 Live law): createSidecarView 가 store.subscribe 로 재렌더 push 를 배선한다 —
+// 어떤 변이 명령이든 store.persist/notify → 구독자 스냅샷 push(cefQuery) → 앱 재렌더. 무거운 astryx/
+// render-core 는 앱 번들(standalone)에 있어 main.js(플러그인 JS = 헤드리스 두뇌)엔 없다.
 import { createStore, type DataKv } from "./commands/store";
 import { registerCommands } from "./commands";
-import { createCanvasView, type ExecuteCommand } from "./view";
+import { createSidecarView, type SidecarApp, type SidecarViewProvider } from "./app/host";
 import type { CommandOutcome } from "./types";
 import * as model from "./model";
 import * as catalog from "./catalog";
@@ -34,10 +33,13 @@ interface ActivateCtx {
     commands?: CommandsSurface;
     data?: { kv?: DataKv };
     project?: { current?: () => { id: string; root: string | null } | null };
+    // 사이드카(browser-chromium 엔진) 채널 — 캔버스를 Chromium 서피스에서 렌더한다(anchor 네이티브).
+    sidecar?: SidecarApp["sidecar"];
+    events?: SidecarApp["events"];
     ui?: {
       registerView?: (
         viewId: string,
-        provider: ReturnType<typeof createCanvasView>["provider"],
+        provider: SidecarViewProvider,
       ) => { dispose(): void } | (() => void);
     };
   };
@@ -73,22 +75,19 @@ export default {
     // 명령 등록(즉시) — 코어 표면은 구조적으로 registerCommands 의 Ctx 와 동형.
     registerCommands(ctx as unknown as Parameters<typeof registerCommands>[0], store);
 
-    // 캔버스 뷰 등록(§7 View law) — "ui" 권한 표면이 있을 때만(헤드리스 ctx 면 건너뜀, 무거운 astryx
-    // 렌더 모듈도 이때만 적재). 툴바 execute 통로는 짧은 명령명에 plugin.<id>. 접두를 채워 코어
-    // registry 로 태운다 — CLI/MCP 와 같은 핸들러라 변이·검증·persist·재렌더가 한 곳에서 일어난다.
+    // 캔버스 뷰 등록(§7 View law) — "ui" 권한 표면이 있을 때만(헤드리스 ctx 면 건너뜀). 뷰는 browser-
+    // chromium 사이드카 서피스에서 standalone.html(앱 껍데기)을 렌더하고, cefQuery 로 스냅샷 push/명령
+    // 릴레이한다. 무거운 astryx/render-core 는 앱 번들(standalone)에 있어 main.js(플러그인 JS)에 없다 —
+    // main.js 는 모델·명령·사이드카 호스트만(헤드리스 두뇌). store.subscribe 는 호스트가 내부에서 건다.
     if (app.ui?.registerView) {
-      const rawExecute = app.commands?.execute;
-      const execute: ExecuteCommand = (name, params) =>
-        rawExecute
-          ? rawExecute(`plugin.${pluginId}.${name}`, params)
-          : Promise.resolve({
-              ok: false,
-              code: "INTERNAL",
-              message: "commands.execute unavailable",
-            });
-      const view = createCanvasView({ store, execute });
-      store.subscribe(view.notify); // 라이브 재렌더 배선(store↔view 순환 회피 — 뷰 생성 후 구독).
-      ctx.subscriptions.push(app.ui.registerView("canvas", view.provider));
+      const sidecarView = createSidecarView({
+        app: app as SidecarApp,
+        store,
+        pluginId,
+        dir: ctx.dir,
+      });
+      ctx.subscriptions.push({ dispose: () => sidecarView.dispose() });
+      ctx.subscriptions.push(app.ui.registerView("canvas", sidecarView.provider));
     }
 
     // 문서 복원(비동기, non-blocking). 하이드레이트 중 변이가 나면 우리 상태가 이긴다(store 가 처리).
