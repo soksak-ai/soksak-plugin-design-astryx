@@ -68,6 +68,7 @@ export function BrowserPanel({
         <span style={{ font: "600 12px system-ui, sans-serif", opacity: 0.7 }}>발견</span>
         <Button
           label="검색"
+          data-node="search"
           size="sm"
           variant="secondary"
           onClick={() => setPaletteOpen(true)}
