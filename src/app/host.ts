@@ -101,6 +101,13 @@ function persistSurfaces(map: Record<string, number>): void {
   }
 }
 
+// 이 플러그인이 점유 주장하는 엔진 서피스(viewId → surfaceId) — 영속 지도의 스냅샷.
+// P6(모든 status 노출): 공유 엔진의 회수(reconcile)는 소유자들의 주장 합집합이 근거다 —
+// 주장을 노출하지 않는 소유자의 서피스는 외부에서 안전하게 회수할 수 없다.
+export function surfaceClaims(): Record<string, number> {
+  return loadPersistedSurfaces();
+}
+
 export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarViewProvider; dispose(): void } {
   const { app, store, pluginId, dir } = deps;
   const shellUrl = `file://${dir}/standalone.html`;
@@ -323,6 +330,7 @@ export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarVie
         // offscreen 모드(스펙 §8) — 엔진이 모듈 소유 레이어로 present, 이 셀이 입력을 소유한다.
         const out = await send({
           type: "create",
+          owner: "soksak-plugin-design-astryx",
           mode: "offscreen",
           scale: window.devicePixelRatio || 1,
           x: r.x, y: r.y, w: r.w, h: r.h,

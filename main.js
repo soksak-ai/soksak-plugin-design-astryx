@@ -22529,6 +22529,386 @@ function applyCanvasSet(current, params) {
   return { next: next2 };
 }
 
+// src/app/host.ts
+init_define_CONTROLLED_INPUT_TYPES();
+
+// src/app/input-forward.ts
+init_define_CONTROLLED_INPUT_TYPES();
+function modsOf(e) {
+  return (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.metaKey ? 8 : 0);
+}
+function forwardInput(container, send) {
+  const pt = (e) => {
+    const r = container.getBoundingClientRect();
+    return { x: Math.round(e.clientX - r.left), y: Math.round(e.clientY - r.top) };
+  };
+  const proxy = document.createElement("input");
+  proxy.type = "text";
+  proxy.setAttribute("aria-hidden", "true");
+  proxy.style.cssText = "position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;border:0;padding:0;pointer-events:none;";
+  container.appendChild(proxy);
+  let moveRaf = 0;
+  let lastMove = null;
+  const flushMove = () => {
+    moveRaf = 0;
+    if (!lastMove) return;
+    const m = lastMove;
+    lastMove = null;
+    send({ type: "mouse", kind: "move", x: m.x, y: m.y, mods: m.mods });
+  };
+  const onMove = (e) => {
+    lastMove = { ...pt(e), mods: modsOf(e) };
+    if (!moveRaf) moveRaf = requestAnimationFrame(flushMove);
+  };
+  const onDown = (e) => {
+    e.preventDefault();
+    proxy.focus({ preventScroll: true });
+    const p = pt(e);
+    send({ type: "focus" });
+    send({
+      type: "mouse",
+      kind: "down",
+      x: p.x,
+      y: p.y,
+      button: e.button === 1 ? 1 : e.button === 2 ? 2 : 0,
+      clicks: Math.max(1, e.detail),
+      mods: modsOf(e)
+    });
+  };
+  const onUp = (e) => {
+    const p = pt(e);
+    send({
+      type: "mouse",
+      kind: "up",
+      x: p.x,
+      y: p.y,
+      button: e.button === 1 ? 1 : e.button === 2 ? 2 : 0,
+      clicks: Math.max(1, e.detail),
+      mods: modsOf(e)
+    });
+  };
+  const onWheel = (e) => {
+    e.preventDefault();
+    const p = pt(e);
+    send({ type: "wheel", x: p.x, y: p.y, dx: Math.round(e.deltaX), dy: Math.round(e.deltaY) });
+  };
+  const onContext = (e) => e.preventDefault();
+  const onKeyDown = (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    const mods = modsOf(e);
+    send({ type: "key", kind: "down", code: e.keyCode, mods });
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+      send({ type: "key", kind: "char", code: e.keyCode, char: e.key, mods });
+    }
+  };
+  const onKeyUp = (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
+    send({ type: "key", kind: "up", code: e.keyCode, mods: modsOf(e) });
+  };
+  const onCompStart = () => {
+    send({ type: "ime", kind: "set", text: "", caret: 0 });
+  };
+  const onCompUpdate = (e) => {
+    const text = e.data ?? "";
+    send({ type: "ime", kind: "set", text, caret: text.length });
+  };
+  const onCompEnd = (e) => {
+    const text = e.data ?? "";
+    proxy.value = "";
+    if (text) send({ type: "ime", kind: "commit", text });
+    else send({ type: "ime", kind: "cancel" });
+  };
+  const onBlur = () => {
+    send({ type: "ime", kind: "finish" });
+  };
+  container.addEventListener("mousemove", onMove);
+  container.addEventListener("mousedown", onDown);
+  container.addEventListener("mouseup", onUp);
+  container.addEventListener("wheel", onWheel, { passive: false });
+  container.addEventListener("contextmenu", onContext);
+  proxy.addEventListener("keydown", onKeyDown);
+  proxy.addEventListener("keyup", onKeyUp);
+  proxy.addEventListener("compositionstart", onCompStart);
+  proxy.addEventListener("compositionupdate", onCompUpdate);
+  proxy.addEventListener("compositionend", onCompEnd);
+  proxy.addEventListener("blur", onBlur);
+  return () => {
+    if (moveRaf) cancelAnimationFrame(moveRaf);
+    container.removeEventListener("mousemove", onMove);
+    container.removeEventListener("mousedown", onDown);
+    container.removeEventListener("mouseup", onUp);
+    container.removeEventListener("wheel", onWheel);
+    container.removeEventListener("contextmenu", onContext);
+    proxy.remove();
+  };
+}
+
+// src/app/host.ts
+function snapshot(store) {
+  return {
+    doc: store.doc,
+    preview: { activePageId: store.preview.activePageId },
+    selection: store.selection,
+    canvasControls: store.canvasControls
+  };
+}
+function safeParse(s) {
+  if (typeof s !== "string") return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+function measureRect(el) {
+  const r = el.getBoundingClientRect();
+  const x = Math.ceil(r.left);
+  const y = Math.ceil(r.top);
+  return { x, y, w: Math.max(1, Math.floor(r.right) - x), h: Math.max(1, Math.floor(r.bottom) - y) };
+}
+var SURFACE_STORE_KEY = "soksak-plugin-design-astryx:surfaces";
+function loadPersistedSurfaces() {
+  try {
+    const raw = sessionStorage.getItem(SURFACE_STORE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+function persistSurfaces(map) {
+  try {
+    sessionStorage.setItem(SURFACE_STORE_KEY, JSON.stringify(map));
+  } catch {
+  }
+}
+function surfaceClaims() {
+  return loadPersistedSurfaces();
+}
+function createSidecarView(deps) {
+  const { app, store, pluginId, dir } = deps;
+  const shellUrl = `file://${dir}/standalone.html`;
+  const surfaceByView = {};
+  let handleP = null;
+  function engine() {
+    if (!app.sidecar) return Promise.reject(new Error("sidecar \uAD8C\uD55C/\uC120\uC5B8 \uC5C6\uC74C"));
+    if (!handleP) {
+      handleP = app.sidecar.open("browser-chromium").catch((e) => {
+        handleP = null;
+        throw e;
+      });
+    }
+    return handleP;
+  }
+  async function send(msg) {
+    try {
+      return await (await engine()).send(msg);
+    } catch (e) {
+      console.warn("[design] sidecar send \uC2E4\uD328:", e);
+      return null;
+    }
+  }
+  {
+    const orphans = loadPersistedSurfaces();
+    persistSurfaces({});
+    const ids = Object.values(orphans);
+    if (ids.length) {
+      void (async () => {
+        for (const id of ids) await send({ type: "close", id });
+      })();
+    }
+  }
+  function trackSurface(viewId, id) {
+    surfaceByView[viewId] = id;
+    persistSurfaces(surfaceByView);
+  }
+  function untrackSurface(viewId) {
+    delete surfaceByView[viewId];
+    persistSurfaces(surfaceByView);
+  }
+  const subscribers = /* @__PURE__ */ new Set();
+  function pushSnapshot(queryId) {
+    void send({
+      type: "query-reply",
+      queryId,
+      success: true,
+      response: JSON.stringify(snapshot(store)),
+      keep: true
+      // persistent — 콜백 유지(다음 변이도 push).
+    });
+  }
+  async function relayExecute(queryId, name, params) {
+    const exec = app.commands?.execute;
+    const outcome = exec ? await exec(`plugin.${pluginId}.${name}`, params) : { ok: false, code: "INTERNAL", message: "commands.execute unavailable" };
+    void send({ type: "query-reply", queryId, success: true, response: JSON.stringify(outcome), keep: false });
+  }
+  const containerById = /* @__PURE__ */ new Map();
+  let relayReady = false;
+  async function ensureRelay() {
+    if (relayReady) return;
+    relayReady = true;
+    const h = await engine();
+    h.on("query", (p) => {
+      const queryId = p.queryId;
+      const req = safeParse(p.request);
+      if (!req || typeof queryId !== "number") return;
+      if (req.kind === "subscribe") {
+        subscribers.add(queryId);
+        pushSnapshot(queryId);
+      } else if (req.kind === "execute") {
+        void relayExecute(queryId, String(req.name ?? ""), req.params ?? {});
+      }
+    });
+    h.on("query-canceled", (p) => {
+      const queryId = p.queryId;
+      if (typeof queryId === "number") subscribers.delete(queryId);
+    });
+    h.on("cursor", (p) => {
+      const el = typeof p.id === "number" ? containerById.get(p.id) : void 0;
+      if (el) el.style.cursor = String(p.type ?? "default");
+    });
+  }
+  function inputForwarder(container, id) {
+    containerById.set(id, container);
+    const stop = forwardInput(container, (m) => void send({ ...m, id }));
+    return () => {
+      containerById.delete(id);
+      stop();
+    };
+  }
+  const unsubStore = store.subscribe(() => {
+    for (const q of subscribers) pushSnapshot(q);
+  });
+  const mounts = /* @__PURE__ */ new WeakMap();
+  function hostSurface(container, id, viewId) {
+    let lastKey = "";
+    const sync = () => {
+      const r = measureRect(container);
+      const key = `${r.x},${r.y},${r.w},${r.h}`;
+      if (key === lastKey) return;
+      lastKey = key;
+      void send({ type: "bounds", id, x: r.x, y: r.y, w: r.w, h: r.h });
+    };
+    let raf = 0;
+    let frames = 0;
+    const STABLE = 4;
+    const tick = () => {
+      const before = lastKey;
+      sync();
+      frames = before === lastKey ? frames + 1 : 0;
+      if (frames < STABLE) raf = requestAnimationFrame(tick);
+      else raf = 0;
+    };
+    const arm = () => {
+      frames = 0;
+      if (!raf) raf = requestAnimationFrame(tick);
+    };
+    const ro = new ResizeObserver(arm);
+    ro.observe(container);
+    const onResize = () => arm();
+    window.addEventListener("resize", onResize);
+    const onPointer = (e) => {
+      if (e.buttons) arm();
+    };
+    document.addEventListener("pointermove", onPointer, true);
+    document.addEventListener("pointerdown", onPointer, true);
+    const offLive = app.events?.on("window.live-resize", arm);
+    const offGesture = app.events?.on("layout.resize-gesture", arm);
+    const io = new IntersectionObserver((entries) => {
+      const visible = entries.some((e) => e.isIntersecting);
+      void send({ type: "hidden", id, hidden: !visible });
+      if (visible) {
+        lastKey = "";
+        arm();
+      }
+    });
+    io.observe(container);
+    const offPark = app.events?.on("view.parked", (p) => {
+      const q = p;
+      if (!viewId || q.viewId !== viewId) return;
+      void send({ type: "hidden", id, hidden: !!q.parked });
+      if (!q.parked) {
+        lastKey = "";
+        arm();
+      }
+    });
+    arm();
+    return () => {
+      ro.disconnect();
+      io.disconnect();
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("pointermove", onPointer, true);
+      document.removeEventListener("pointerdown", onPointer, true);
+      offLive?.dispose();
+      offGesture?.dispose();
+      offPark?.dispose();
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }
+  const PENDING = { id: -1, dispose: () => {
+  } };
+  const provider = {
+    mount(container, ctx) {
+      const viewId = ctx.viewId;
+      if (!viewId) return;
+      if (mounts.has(container)) return;
+      mounts.set(container, PENDING);
+      void ensureRelay();
+      container.style.position = "absolute";
+      container.style.inset = "0";
+      container.style.background = "transparent";
+      container.style.overflow = "hidden";
+      void (async () => {
+        const r = measureRect(container);
+        const out = await send({
+          type: "create",
+          owner: "soksak-plugin-design-astryx",
+          mode: "offscreen",
+          scale: window.devicePixelRatio || 1,
+          x: r.x,
+          y: r.y,
+          w: r.w,
+          h: r.h,
+          url: shellUrl
+        });
+        const id = out && typeof out.id === "number" ? out.id : null;
+        if (id == null) {
+          console.warn("[design] \uC11C\uD53C\uC2A4 \uC0DD\uC131 \uC2E4\uD328");
+          if (mounts.get(container) === PENDING) mounts.delete(container);
+          return;
+        }
+        if (mounts.get(container) !== PENDING) {
+          void send({ type: "close", id });
+          return;
+        }
+        trackSurface(viewId, id);
+        const stop = hostSurface(container, id, viewId);
+        const stopInput = inputForwarder(container, id);
+        mounts.set(container, {
+          id,
+          dispose: () => {
+            stopInput();
+            stop();
+            untrackSurface(viewId);
+            void send({ type: "close", id });
+          }
+        });
+      })();
+    },
+    unmount(container) {
+      const m = mounts.get(container);
+      mounts.delete(container);
+      if (m && m !== PENDING) m.dispose();
+    }
+  };
+  return {
+    provider,
+    dispose() {
+      unsubStore();
+    }
+  };
+}
+
 // src/catalog/index.ts
 var catalog_exports = {};
 __export(catalog_exports, {
@@ -37174,7 +37554,7 @@ function registerCommands(ctx, store) {
     (d) => `\uBB38\uC11C: \uD14C\uB9C8 ${d.activeTheme}, \uD398\uC774\uC9C0 ${d.pageCount}\uAC1C.`,
     () => {
       const pages = pageSummaries(store.doc);
-      return { activeTheme: store.doc.activeTheme, pageCount: pages.length, pages };
+      return { activeTheme: store.doc.activeTheme, pageCount: pages.length, pages, surfaces: surfaceClaims() };
     }
   );
   add(
@@ -37633,372 +38013,6 @@ function registerCommands(ctx, store) {
     },
     { pageId: { type: "string", required: true, description: "Page id to export." } }
   );
-}
-
-// src/app/host.ts
-init_define_CONTROLLED_INPUT_TYPES();
-
-// src/app/input-forward.ts
-init_define_CONTROLLED_INPUT_TYPES();
-function modsOf(e) {
-  return (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.altKey ? 4 : 0) | (e.metaKey ? 8 : 0);
-}
-function forwardInput(container, send) {
-  const pt = (e) => {
-    const r = container.getBoundingClientRect();
-    return { x: Math.round(e.clientX - r.left), y: Math.round(e.clientY - r.top) };
-  };
-  const proxy = document.createElement("input");
-  proxy.type = "text";
-  proxy.setAttribute("aria-hidden", "true");
-  proxy.style.cssText = "position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;border:0;padding:0;pointer-events:none;";
-  container.appendChild(proxy);
-  let moveRaf = 0;
-  let lastMove = null;
-  const flushMove = () => {
-    moveRaf = 0;
-    if (!lastMove) return;
-    const m = lastMove;
-    lastMove = null;
-    send({ type: "mouse", kind: "move", x: m.x, y: m.y, mods: m.mods });
-  };
-  const onMove = (e) => {
-    lastMove = { ...pt(e), mods: modsOf(e) };
-    if (!moveRaf) moveRaf = requestAnimationFrame(flushMove);
-  };
-  const onDown = (e) => {
-    e.preventDefault();
-    proxy.focus({ preventScroll: true });
-    const p = pt(e);
-    send({ type: "focus" });
-    send({
-      type: "mouse",
-      kind: "down",
-      x: p.x,
-      y: p.y,
-      button: e.button === 1 ? 1 : e.button === 2 ? 2 : 0,
-      clicks: Math.max(1, e.detail),
-      mods: modsOf(e)
-    });
-  };
-  const onUp = (e) => {
-    const p = pt(e);
-    send({
-      type: "mouse",
-      kind: "up",
-      x: p.x,
-      y: p.y,
-      button: e.button === 1 ? 1 : e.button === 2 ? 2 : 0,
-      clicks: Math.max(1, e.detail),
-      mods: modsOf(e)
-    });
-  };
-  const onWheel = (e) => {
-    e.preventDefault();
-    const p = pt(e);
-    send({ type: "wheel", x: p.x, y: p.y, dx: Math.round(e.deltaX), dy: Math.round(e.deltaY) });
-  };
-  const onContext = (e) => e.preventDefault();
-  const onKeyDown = (e) => {
-    if (e.isComposing || e.keyCode === 229) return;
-    e.preventDefault();
-    const mods = modsOf(e);
-    send({ type: "key", kind: "down", code: e.keyCode, mods });
-    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
-      send({ type: "key", kind: "char", code: e.keyCode, char: e.key, mods });
-    }
-  };
-  const onKeyUp = (e) => {
-    if (e.isComposing || e.keyCode === 229) return;
-    send({ type: "key", kind: "up", code: e.keyCode, mods: modsOf(e) });
-  };
-  const onCompStart = () => {
-    send({ type: "ime", kind: "set", text: "", caret: 0 });
-  };
-  const onCompUpdate = (e) => {
-    const text = e.data ?? "";
-    send({ type: "ime", kind: "set", text, caret: text.length });
-  };
-  const onCompEnd = (e) => {
-    const text = e.data ?? "";
-    proxy.value = "";
-    if (text) send({ type: "ime", kind: "commit", text });
-    else send({ type: "ime", kind: "cancel" });
-  };
-  const onBlur = () => {
-    send({ type: "ime", kind: "finish" });
-  };
-  container.addEventListener("mousemove", onMove);
-  container.addEventListener("mousedown", onDown);
-  container.addEventListener("mouseup", onUp);
-  container.addEventListener("wheel", onWheel, { passive: false });
-  container.addEventListener("contextmenu", onContext);
-  proxy.addEventListener("keydown", onKeyDown);
-  proxy.addEventListener("keyup", onKeyUp);
-  proxy.addEventListener("compositionstart", onCompStart);
-  proxy.addEventListener("compositionupdate", onCompUpdate);
-  proxy.addEventListener("compositionend", onCompEnd);
-  proxy.addEventListener("blur", onBlur);
-  return () => {
-    if (moveRaf) cancelAnimationFrame(moveRaf);
-    container.removeEventListener("mousemove", onMove);
-    container.removeEventListener("mousedown", onDown);
-    container.removeEventListener("mouseup", onUp);
-    container.removeEventListener("wheel", onWheel);
-    container.removeEventListener("contextmenu", onContext);
-    proxy.remove();
-  };
-}
-
-// src/app/host.ts
-function snapshot(store) {
-  return {
-    doc: store.doc,
-    preview: { activePageId: store.preview.activePageId },
-    selection: store.selection,
-    canvasControls: store.canvasControls
-  };
-}
-function safeParse(s) {
-  if (typeof s !== "string") return null;
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-}
-function measureRect(el) {
-  const r = el.getBoundingClientRect();
-  const x = Math.ceil(r.left);
-  const y = Math.ceil(r.top);
-  return { x, y, w: Math.max(1, Math.floor(r.right) - x), h: Math.max(1, Math.floor(r.bottom) - y) };
-}
-var SURFACE_STORE_KEY = "soksak-plugin-design-astryx:surfaces";
-function loadPersistedSurfaces() {
-  try {
-    const raw = sessionStorage.getItem(SURFACE_STORE_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-function persistSurfaces(map) {
-  try {
-    sessionStorage.setItem(SURFACE_STORE_KEY, JSON.stringify(map));
-  } catch {
-  }
-}
-function createSidecarView(deps) {
-  const { app, store, pluginId, dir } = deps;
-  const shellUrl = `file://${dir}/standalone.html`;
-  const surfaceByView = {};
-  let handleP = null;
-  function engine() {
-    if (!app.sidecar) return Promise.reject(new Error("sidecar \uAD8C\uD55C/\uC120\uC5B8 \uC5C6\uC74C"));
-    if (!handleP) {
-      handleP = app.sidecar.open("browser-chromium").catch((e) => {
-        handleP = null;
-        throw e;
-      });
-    }
-    return handleP;
-  }
-  async function send(msg) {
-    try {
-      return await (await engine()).send(msg);
-    } catch (e) {
-      console.warn("[design] sidecar send \uC2E4\uD328:", e);
-      return null;
-    }
-  }
-  {
-    const orphans = loadPersistedSurfaces();
-    persistSurfaces({});
-    const ids = Object.values(orphans);
-    if (ids.length) {
-      void (async () => {
-        for (const id of ids) await send({ type: "close", id });
-      })();
-    }
-  }
-  function trackSurface(viewId, id) {
-    surfaceByView[viewId] = id;
-    persistSurfaces(surfaceByView);
-  }
-  function untrackSurface(viewId) {
-    delete surfaceByView[viewId];
-    persistSurfaces(surfaceByView);
-  }
-  const subscribers = /* @__PURE__ */ new Set();
-  function pushSnapshot(queryId) {
-    void send({
-      type: "query-reply",
-      queryId,
-      success: true,
-      response: JSON.stringify(snapshot(store)),
-      keep: true
-      // persistent — 콜백 유지(다음 변이도 push).
-    });
-  }
-  async function relayExecute(queryId, name, params) {
-    const exec = app.commands?.execute;
-    const outcome = exec ? await exec(`plugin.${pluginId}.${name}`, params) : { ok: false, code: "INTERNAL", message: "commands.execute unavailable" };
-    void send({ type: "query-reply", queryId, success: true, response: JSON.stringify(outcome), keep: false });
-  }
-  const containerById = /* @__PURE__ */ new Map();
-  let relayReady = false;
-  async function ensureRelay() {
-    if (relayReady) return;
-    relayReady = true;
-    const h = await engine();
-    h.on("query", (p) => {
-      const queryId = p.queryId;
-      const req = safeParse(p.request);
-      if (!req || typeof queryId !== "number") return;
-      if (req.kind === "subscribe") {
-        subscribers.add(queryId);
-        pushSnapshot(queryId);
-      } else if (req.kind === "execute") {
-        void relayExecute(queryId, String(req.name ?? ""), req.params ?? {});
-      }
-    });
-    h.on("query-canceled", (p) => {
-      const queryId = p.queryId;
-      if (typeof queryId === "number") subscribers.delete(queryId);
-    });
-    h.on("cursor", (p) => {
-      const el = typeof p.id === "number" ? containerById.get(p.id) : void 0;
-      if (el) el.style.cursor = String(p.type ?? "default");
-    });
-  }
-  function inputForwarder(container, id) {
-    containerById.set(id, container);
-    const stop = forwardInput(container, (m) => void send({ ...m, id }));
-    return () => {
-      containerById.delete(id);
-      stop();
-    };
-  }
-  const unsubStore = store.subscribe(() => {
-    for (const q of subscribers) pushSnapshot(q);
-  });
-  const mounts = /* @__PURE__ */ new WeakMap();
-  function hostSurface(container, id) {
-    let lastKey = "";
-    const sync = () => {
-      const r = measureRect(container);
-      const key = `${r.x},${r.y},${r.w},${r.h}`;
-      if (key === lastKey) return;
-      lastKey = key;
-      void send({ type: "bounds", id, x: r.x, y: r.y, w: r.w, h: r.h });
-    };
-    let raf = 0;
-    let frames = 0;
-    const STABLE = 4;
-    const tick = () => {
-      const before = lastKey;
-      sync();
-      frames = before === lastKey ? frames + 1 : 0;
-      if (frames < STABLE) raf = requestAnimationFrame(tick);
-      else raf = 0;
-    };
-    const arm = () => {
-      frames = 0;
-      if (!raf) raf = requestAnimationFrame(tick);
-    };
-    const ro = new ResizeObserver(arm);
-    ro.observe(container);
-    const onResize = () => arm();
-    window.addEventListener("resize", onResize);
-    const onPointer = (e) => {
-      if (e.buttons) arm();
-    };
-    document.addEventListener("pointermove", onPointer, true);
-    document.addEventListener("pointerdown", onPointer, true);
-    const offLive = app.events?.on("window.live-resize", arm);
-    const offGesture = app.events?.on("layout.resize-gesture", arm);
-    const io = new IntersectionObserver((entries) => {
-      const visible = entries.some((e) => e.isIntersecting);
-      void send({ type: "hidden", id, hidden: !visible });
-      if (visible) {
-        lastKey = "";
-        arm();
-      }
-    });
-    io.observe(container);
-    arm();
-    return () => {
-      ro.disconnect();
-      io.disconnect();
-      window.removeEventListener("resize", onResize);
-      document.removeEventListener("pointermove", onPointer, true);
-      document.removeEventListener("pointerdown", onPointer, true);
-      offLive?.dispose();
-      offGesture?.dispose();
-      if (raf) cancelAnimationFrame(raf);
-    };
-  }
-  const PENDING = { id: -1, dispose: () => {
-  } };
-  const provider = {
-    mount(container, ctx) {
-      const viewId = ctx.viewId;
-      if (!viewId) return;
-      if (mounts.has(container)) return;
-      mounts.set(container, PENDING);
-      void ensureRelay();
-      container.style.position = "absolute";
-      container.style.inset = "0";
-      container.style.background = "transparent";
-      container.style.overflow = "hidden";
-      void (async () => {
-        const r = measureRect(container);
-        const out = await send({
-          type: "create",
-          mode: "offscreen",
-          scale: window.devicePixelRatio || 1,
-          x: r.x,
-          y: r.y,
-          w: r.w,
-          h: r.h,
-          url: shellUrl
-        });
-        const id = out && typeof out.id === "number" ? out.id : null;
-        if (id == null) {
-          console.warn("[design] \uC11C\uD53C\uC2A4 \uC0DD\uC131 \uC2E4\uD328");
-          if (mounts.get(container) === PENDING) mounts.delete(container);
-          return;
-        }
-        if (mounts.get(container) !== PENDING) {
-          void send({ type: "close", id });
-          return;
-        }
-        trackSurface(viewId, id);
-        const stop = hostSurface(container, id);
-        const stopInput = inputForwarder(container, id);
-        mounts.set(container, {
-          id,
-          dispose: () => {
-            stopInput();
-            stop();
-            untrackSurface(viewId);
-            void send({ type: "close", id });
-          }
-        });
-      })();
-    },
-    unmount(container) {
-      const m = mounts.get(container);
-      mounts.delete(container);
-      if (m && m !== PENDING) m.dispose();
-    }
-  };
-  return {
-    provider,
-    dispose() {
-      unsubStore();
-    }
-  };
 }
 
 // src/plugin-entry.ts
