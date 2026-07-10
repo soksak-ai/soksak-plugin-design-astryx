@@ -47,6 +47,7 @@
         "placements": [
           "content"
         ],
+        "status": [],
         "defaultPlacement": "content",
         "transparent": true
       }
