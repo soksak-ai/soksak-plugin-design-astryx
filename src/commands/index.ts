@@ -19,6 +19,7 @@ import { resolveThemeMode } from "./theme-mode";
 import { compileGate } from "./compile";
 import { resolveSelection, applyCanvasSet } from "./canvas-session";
 import type { DesignStore } from "./store";
+import { surfaceClaims } from "../app/host";
 
 // 트리 모델·카탈로그·템플릿·내보내기·문서(각 병렬 에이전트 소유 — CONTRACT 시그니처에 맞춘다).
 import * as model from "../model";
@@ -147,7 +148,8 @@ export function registerCommands(ctx: Ctx, store: DesignStore): void {
     (d) => `문서: 테마 ${d.activeTheme}, 페이지 ${d.pageCount}개.`,
     () => {
       const pages = model.pageSummaries(store.doc);
-      return { activeTheme: store.doc.activeTheme, pageCount: pages.length, pages };
+      // surfaces: 점유 중인 엔진 서피스(viewId → surfaceId) — 공유 엔진 회수의 주장 근거(P6).
+      return { activeTheme: store.doc.activeTheme, pageCount: pages.length, pages, surfaces: surfaceClaims() };
     },
   );
 
