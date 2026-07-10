@@ -225,7 +225,7 @@ export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarVie
   // 이동(패널 분할·사이드바 토글은 rect 를 옮기되 크기 불변 → ResizeObserver 가 못 봄)까지 잡기 위해
   // 자기종료 rAF settle 루프를 이벤트로 재무장한다(browser-view 축소판). 가림(탭 전환)은 Intersection-
   // Observer 로 hidden 토글(가려진 CEF child 는 rAF 정지 → 자원 절약).
-  function hostSurface(container: HTMLElement, id: number): () => void {
+  function hostSurface(container: HTMLElement, id: number, viewId: string | null): () => void {
     let lastKey = "";
     const sync = (): void => {
       const r = measureRect(container);
@@ -274,6 +274,16 @@ export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarVie
       }
     });
     io.observe(container);
+    // 1차 신호는 코어 view.parked(시트 활성 && 탭 활성의 단일 판정) — IO 는 안전망으로 유지.
+    const offPark = app.events?.on("view.parked", (p) => {
+      const q = p as { viewId?: string; parked?: boolean };
+      if (!viewId || q.viewId !== viewId) return;
+      void send({ type: "hidden", id, hidden: !!q.parked });
+      if (!q.parked) {
+        lastKey = "";
+        arm();
+      }
+    });
 
     arm(); // 초기 settle.
 
@@ -285,6 +295,7 @@ export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarVie
       document.removeEventListener("pointerdown", onPointer, true);
       offLive?.dispose();
       offGesture?.dispose();
+      offPark?.dispose();
       if (raf) cancelAnimationFrame(raf);
     };
   }
@@ -329,7 +340,7 @@ export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarVie
           return;
         }
         trackSurface(viewId, id); // 영속(reload 넘어 유령 회수용).
-        const stop = hostSurface(container, id);
+        const stop = hostSurface(container, id, viewId);
         const stopInput = inputForwarder(container, id);
         mounts.set(container, {
           id,
