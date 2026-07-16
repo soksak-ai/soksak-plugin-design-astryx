@@ -22,7 +22,10 @@
   "sidecars": [
     {
       "name": "browser-chromium",
-      \"interface\": { \"id\": \"soksak-spec-sidecar-browser\", \"range\": \"0.0.1\" },
+      "interface": {
+        "id": "soksak-spec-sidecar-browser",
+        "range": "0.0.1"
+      },
       "reach": {
         "fetch": {
           "url": {
