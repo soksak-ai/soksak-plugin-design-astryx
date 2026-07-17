@@ -33,5 +33,11 @@
     "jsdom": "^27.0.0",
     "typescript": "^5.9.0",
     "vitest": "^2.1.0"
+  },
+  "soksakRelease": {
+    "kind": "plugin",
+    "id": "soksak-plugin-design-astryx",
+    "repository": "https://github.com/soksak-ai/soksak-plugin-design-astryx",
+    "manifest": "release.json"
   }
 }

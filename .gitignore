@@ -3,3 +3,5 @@ generated/
 
 # local-only working notes (never committed)
 secret/
+dist/
+.soksak.json
