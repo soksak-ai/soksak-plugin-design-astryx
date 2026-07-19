@@ -1,7 +1,7 @@
 {
   "name": "soksak-plugin-design-astryx",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
   "scripts": {
     "gen": "node scripts/gen-catalog.mjs && node scripts/gen-templates.mjs && node scripts/gen-docs.mjs",
