@@ -12,6 +12,7 @@
 import { createStore, type DataKv } from "./commands/store";
 import { registerCommands } from "./commands";
 import { createSidecarView, type SidecarApp, type SidecarViewProvider } from "./app/host";
+import { registerRailContainer, type RailSlot } from "./app/railBridge";
 import type { CommandOutcome } from "./types";
 import * as model from "./model";
 import * as catalog from "./catalog";
@@ -46,6 +47,43 @@ interface ActivateCtx {
   manifest: { id: string; version: string };
   dir: string;
   subscriptions: Array<{ dispose(): void } | (() => void)>;
+}
+
+// 방출된 사이드바(rail) 뷰 — 컨테이너만 소유한다(사이드바 방출 v1). 내용은 결부 캔버스의 호스트가
+// 브리지(railBridge)로 찾아 패널 서피스로 그린다(상태 단일 소유·이중 진실 0). Shadow/CSS 주입 없음 —
+// 등록 컨테이너는 캔버스 셀과 같은 투명 홀이 된다(호스트 openSurface 가 스타일링). 미결부(캔버스 아님)
+// 마운트는 담백한 정적 안내.
+const railCleanups = new WeakMap<HTMLElement, () => void>();
+
+function railView(slot: RailSlot): SidecarViewProvider {
+  return {
+    mount(container, ctx) {
+      railCleanups.get(container)?.();
+      container.replaceChildren();
+      const bound = ctx.boundViewId ?? null;
+      if (!bound) {
+        const note = document.createElement("div");
+        note.style.cssText = "padding:14px;font-size:11px;color:#8a94a3;text-align:center";
+        note.textContent = "Astryx 디자인 결부 없음";
+        container.appendChild(note);
+        railCleanups.set(container, () => container.replaceChildren());
+        return;
+      }
+      container.style.position = "relative";
+      const host = document.createElement("div");
+      host.style.cssText = "position:absolute;inset:0;overflow:hidden;background:transparent";
+      container.appendChild(host);
+      const off = registerRailContainer(bound, slot, host);
+      railCleanups.set(container, () => {
+        off();
+        container.replaceChildren();
+      });
+    },
+    unmount(container) {
+      railCleanups.get(container)?.();
+      railCleanups.delete(container);
+    },
+  };
 }
 
 export default {
@@ -88,6 +126,10 @@ export default {
       });
       ctx.subscriptions.push({ dispose: () => sidecarView.dispose() });
       ctx.subscriptions.push(app.ui.registerView("canvas", sidecarView.provider));
+      // 방출된 사이드바(rail) 뷰 2종 — 투영 코어가 결부 시 boundViewId 와 함께 마운트한다.
+      // 투영 없는 코어에선 마운트가 안 와 캔버스가 인라인 패널 폴백을 유지한다(구코어 호환).
+      ctx.subscriptions.push(app.ui.registerView("structure", railView("structure")));
+      ctx.subscriptions.push(app.ui.registerView("inspector", railView("inspector")));
     }
 
     // 문서 복원(비동기, non-blocking). 하이드레이트 중 변이가 나면 우리 상태가 이긴다(store 가 처리).

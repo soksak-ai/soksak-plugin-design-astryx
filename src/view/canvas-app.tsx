@@ -45,6 +45,9 @@ import { CodeOverlay } from "./code-view";
 type ViewStore = CanvasStore & {
   readonly selection?: Selection | null;
   readonly canvasControls?: CanvasControls;
+  // 사이드바 레일 방출 보고(호스트가 스냅샷에 실음) — true 인 슬롯은 결부 레일 서피스가 그리므로
+  // 인라인 패널을 접는다. 부재(구코어·프리뷰·헤드리스)는 인라인 폴백.
+  readonly rails?: { structure?: boolean; inspector?: boolean } | null;
 };
 
 // 활성 페이지를 React 로 낮춘다(§7 Rendering core law): tsx 는 원본 코드를 sucrase→shim→default 마운트,
@@ -269,9 +272,17 @@ export function CanvasApp({
       >
         <CanvasFrame
           header={header}
-          structure={<TreePanel page={page} selectedNodeId={selNodeId} execute={execute} />}
+          structure={
+            store.rails?.structure ? null : (
+              <TreePanel page={page} selectedNodeId={selNodeId} execute={execute} />
+            )
+          }
           canvas={canvasContent}
-          inspector={<Inspector page={page} node={selectedNode} entry={entry} execute={execute} />}
+          inspector={
+            store.rails?.inspector ? null : (
+              <Inspector page={page} node={selectedNode} entry={entry} execute={execute} />
+            )
+          }
         />
       </ThemeScope>
 

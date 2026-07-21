@@ -13,6 +13,7 @@
 // 엔진 커서는 cursor 이벤트로 돌아와 셀 CSS cursor 에 미러링된다.
 import type { DesignStore } from "../commands/store";
 import { forwardInput } from "./input-forward";
+import { RAIL_SLOTS, railContainer, subscribeRail, type RailSlot } from "./railBridge";
 
 // 코어 app.sidecar.open 반환(browser-chromium host.ts 동형). 코어는 이 메시지 의미를 모른다(맹목 relay).
 export interface SidecarHandle {
@@ -33,6 +34,8 @@ export interface SidecarApp {
 export interface SidecarViewContext {
   projectId: string;
   viewId: string | null;
+  /** 레일 투영 마운트가 섬기는 결부 콘텐츠 뷰 id(코어 사이드바 투영) — rail 뷰 마운트에서만 온다. */
+  boundViewId?: string | null;
   setTitle?: (title: string) => void;
 }
 export interface SidecarViewProvider {
@@ -47,14 +50,19 @@ export interface SidecarViewDeps {
   dir: string; // 플러그인 디렉토리 — file://<dir>/standalone.html 셸 위치.
 }
 
-// ViewStore 스냅샷 — 앱(CanvasApp)이 읽는 형태(doc·activePageId·selection·canvasControls). 동적 상태만
-// (정적 자산은 앱 번들에 이미 있어 push 안 함 → 가볍다).
-function snapshot(store: DesignStore): Record<string, unknown> {
+// ViewStore 스냅샷 — 앱(CanvasApp·RailPanelApp)이 읽는 형태(doc·activePageId·selection·canvasControls).
+// 동적 상태만(정적 자산은 앱 번들에 이미 있어 push 안 함 → 가볍다). rails = 뷰별 레일 방출 보고 —
+// 캔버스 앱이 자기 vid 항목을 보고 인라인 패널을 접는다(부재 = 인라인 폴백).
+function snapshot(
+  store: DesignStore,
+  rails: Record<string, { structure: boolean; inspector: boolean }>,
+): Record<string, unknown> {
   return {
     doc: store.doc,
     preview: { activePageId: store.preview.activePageId },
     selection: store.selection,
     canvasControls: store.canvasControls,
+    rails,
   };
 }
 
@@ -76,7 +84,6 @@ function measureRect(el: HTMLElement): { x: number; y: number; w: number; h: num
 }
 
 interface Mounted {
-  id: number;
   dispose: () => void;
 }
 
@@ -160,14 +167,20 @@ export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarVie
 
   // 스냅샷 구독자(cefQuery persistent query id) — 앱이 {kind:subscribe} 로 등록. store.notify 마다 push.
   const subscribers = new Set<number>();
+  // 레일 방출 상태(캔버스 viewId → 슬롯별 present 여부) — 스냅샷에 실려 각 캔버스 앱이 자기 항목을
+  // 보고 인라인 패널을 접는다. 작성자는 presentRails 뿐(브리지 등록이 유일 근거 — 이중 진실 0).
+  const railsByView: Record<string, { structure: boolean; inspector: boolean }> = {};
   function pushSnapshot(queryId: number): void {
     void send({
       type: "query-reply",
       queryId,
       success: true,
-      response: JSON.stringify(snapshot(store)),
+      response: JSON.stringify(snapshot(store, railsByView)),
       keep: true, // persistent — 콜백 유지(다음 변이도 push).
     });
+  }
+  function pushAll(): void {
+    for (const q of subscribers) pushSnapshot(q);
   }
 
   async function relayExecute(queryId: number, name: string, params: Record<string, unknown>): Promise<void> {
@@ -222,9 +235,121 @@ export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarVie
   }
 
   // store 변이 → 구독자 전원에 스냅샷 push(§7 Live law). 명령이 store.persist/notify 를 태우면 여기로 온다.
-  const unsubStore = store.subscribe(() => {
-    for (const q of subscribers) pushSnapshot(q);
-  });
+  const unsubStore = store.subscribe(pushAll);
+
+  // ── 서피스 열기(공통 수송로) — 홀 스타일링 + create + bounds-follow + 입력 포워딩. 캔버스와 레일
+  // 패널이 같은 경로를 쓴다(§7 View law: 표면은 전부 Chromium 서피스). close 는 create 완주 전이어도
+  // 안전하다(late-create 자기 close). onFail = create 실패 시 소유자 재시도 훅.
+  interface SurfaceHandle {
+    close(): void;
+  }
+  function openSurface(
+    container: HTMLElement,
+    url: string,
+    claimKey: string,
+    parkViewId: string | null,
+    onFail?: () => void,
+  ): SurfaceHandle {
+    let closed = false;
+    let disposeLive: (() => void) | null = null;
+    void ensureRelay();
+    // 투명 홀 — 컨테이너를 채우는 투명 영역. 매니페스트 transparent:true 와 짝: CEF child 가 메인 웹뷰
+    // 아래에서 이 rect 를 통해 비친다. 위에 불투명 페인트가 있으면 서피스가 가려진다.
+    container.style.position = "absolute";
+    container.style.inset = "0";
+    container.style.background = "transparent";
+    container.style.overflow = "hidden";
+    void (async () => {
+      const r = measureRect(container);
+      // offscreen 모드(스펙 §8) — 엔진이 모듈 소유 레이어로 present, 이 셀이 입력을 소유한다.
+      const out = await send({
+        type: "create",
+        owner: "soksak-plugin-design-astryx",
+        mode: "offscreen",
+        scale: window.devicePixelRatio || 1,
+        x: r.x, y: r.y, w: r.w, h: r.h,
+        url,
+      });
+      const id = out && typeof out.id === "number" ? (out.id as number) : null;
+      if (id == null) {
+        console.warn("[design] 서피스 생성 실패");
+        if (!closed) onFail?.(); // 소유자가 마커를 지워 다음 mount/등록 때 재시도.
+        return;
+      }
+      if (closed) {
+        // create 대기 중 close 됨 — late-create 유령 방지.
+        void send({ type: "close", id });
+        return;
+      }
+      trackSurface(claimKey, id); // 영속(reload 넘어 유령 회수용).
+      const stop = hostSurface(container, id, parkViewId);
+      const stopInput = inputForwarder(container, id);
+      disposeLive = () => {
+        stopInput();
+        stop();
+        untrackSurface(claimKey);
+        void send({ type: "close", id });
+      };
+    })();
+    return {
+      close() {
+        if (closed) return;
+        closed = true;
+        disposeLive?.();
+        disposeLive = null;
+      },
+    };
+  }
+
+  // ── 레일 present(사이드바 방출) — 결부 캔버스 뷰(viewId)의 브리지 등록을 구독해, 등록된 레일
+  // 컨테이너마다 패널 서피스(standalone.html 패널 모드)를 연다. 컨테이너가 사라지면 닫는다. 이것이
+  // 이 플러그인의 "포털"이다: 캔버스 앱은 별도 document(CEF)라 React 포털이 경계를 못 건너므로,
+  // 같은 원리(rail 뷰 = 컨테이너만, 내용은 결부 콘텐츠 소유자가 그림)를 서피스 수송로로 잇는다.
+  // 상태는 호스트 스토어 그대로 — 패널 앱은 캔버스 앱과 같은 스냅샷 구독 뷰다(이중 진실 0).
+  function presentRails(viewId: string): () => void {
+    const open: Partial<Record<RailSlot, { container: HTMLElement; handle: SurfaceHandle }>> = {};
+    const sync = (): void => {
+      let changed = false;
+      for (const slot of RAIL_SLOTS) {
+        const target = railContainer(viewId, slot);
+        const cur = open[slot];
+        if (cur && cur.container !== target) {
+          cur.handle.close();
+          delete open[slot];
+          changed = true;
+        }
+        if (target && !open[slot]) {
+          const url = `${shellUrl}#vid=${encodeURIComponent(viewId)}&panel=${slot}`;
+          const entry = {
+            container: target,
+            handle: openSurface(target, url, `${viewId}/${slot}`, null, () => {
+              if (open[slot] === entry) delete open[slot]; // 실패 → 다음 브리지 통지 때 재시도.
+            }),
+          };
+          open[slot] = entry;
+          changed = true;
+        }
+      }
+      const next = { structure: !!open.structure, inspector: !!open.inspector };
+      const prev = railsByView[viewId];
+      if (!prev || prev.structure !== next.structure || prev.inspector !== next.inspector) {
+        railsByView[viewId] = next;
+        changed = true;
+      }
+      if (changed) pushAll();
+    };
+    const off = subscribeRail(viewId, sync);
+    sync();
+    return () => {
+      off();
+      for (const slot of RAIL_SLOTS) {
+        open[slot]?.handle.close();
+        delete open[slot];
+      }
+      delete railsByView[viewId];
+      pushAll();
+    };
+  }
 
   const mounts = new WeakMap<HTMLElement, Mounted>();
 
@@ -307,64 +432,36 @@ export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarVie
     };
   }
 
-  // 마운트 진행/완료 마커 — async create 전에 동기 등록해 재진입(중복 mount)을 막는다. 서피스는
-  // 컨테이너당 정확히 1개(누수 방지). create 실패·해제 시 마커를 지워 다음 mount 를 허용한다.
-  const PENDING: Mounted = { id: -1, dispose: () => {} };
-
   const provider: SidecarViewProvider = {
     mount(container, ctx) {
       const viewId = ctx.viewId;
       if (!viewId) return; // 콘텐츠 배치만(사이드바 등 viewId 없는 배치는 서피스 없음).
       if (mounts.has(container)) return; // 이미 마운트/진행 중 — 중복 서피스 생성 방어(누수 방지).
-      mounts.set(container, PENDING); // 동기 마커 — async create 전에 재진입 차단.
-      void ensureRelay();
-      // 투명 홀 — 컨테이너를 채우는 투명 영역. 매니페스트 transparent:true 와 짝: CEF child 가 메인 웹뷰
-      // 아래에서 이 rect 를 통해 비친다. 위에 불투명 페인트가 있으면 서피스가 가려진다.
-      container.style.position = "absolute";
-      container.style.inset = "0";
-      container.style.background = "transparent";
-      container.style.overflow = "hidden";
-
-      void (async () => {
-        const r = measureRect(container);
-        // offscreen 모드(스펙 §8) — 엔진이 모듈 소유 레이어로 present, 이 셀이 입력을 소유한다.
-        const out = await send({
-          type: "create",
-          owner: "soksak-plugin-design-astryx",
-          mode: "offscreen",
-          scale: window.devicePixelRatio || 1,
-          x: r.x, y: r.y, w: r.w, h: r.h,
-          url: shellUrl,
-        });
-        const id = out && typeof out.id === "number" ? (out.id as number) : null;
-        if (id == null) {
-          console.warn("[design] 서피스 생성 실패");
-          if (mounts.get(container) === PENDING) mounts.delete(container); // 실패 → 재시도 허용.
-          return;
-        }
-        // create 대기 중 unmount 됐으면(마커가 사라졌거나 교체) 즉시 닫는다(late-create 유령 방지).
-        if (mounts.get(container) !== PENDING) {
-          void send({ type: "close", id });
-          return;
-        }
-        trackSurface(viewId, id); // 영속(reload 넘어 유령 회수용).
-        const stop = hostSurface(container, id, viewId);
-        const stopInput = inputForwarder(container, id);
-        mounts.set(container, {
-          id,
-          dispose: () => {
-            stopInput();
-            stop();
-            untrackSurface(viewId);
-            void send({ type: "close", id });
-          },
-        });
-      })();
+      // 캔버스 서피스 — vid 프래그먼트로 자기식별(앱이 스냅샷 rails 에서 자기 항목을 찾는 키).
+      const surface = openSurface(
+        container,
+        `${shellUrl}#vid=${encodeURIComponent(viewId)}`,
+        viewId,
+        viewId,
+        () => {
+          // create 실패 — 마운트 전체(레일 watcher 포함)를 물려 다음 mount 재시도를 허용한다.
+          const m = mounts.get(container);
+          mounts.delete(container);
+          m?.dispose();
+        },
+      );
+      const offRails = presentRails(viewId);
+      mounts.set(container, {
+        dispose() {
+          offRails();
+          surface.close();
+        },
+      });
     },
     unmount(container) {
       const m = mounts.get(container);
-      mounts.delete(container); // 먼저 지워 진행 중 late-create 가 스스로 닫히게(마커 불일치 감지).
-      if (m && m !== PENDING) m.dispose();
+      mounts.delete(container);
+      m?.dispose(); // close 는 create 완주 전이어도 안전(openSurface 의 late-create 자기 close).
     },
   };
 

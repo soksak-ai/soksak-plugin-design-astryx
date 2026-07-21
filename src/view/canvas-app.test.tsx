@@ -70,6 +70,7 @@ interface Store {
   preview: { activePageId: string | null };
   selection: Selection | null;
   canvasControls: CanvasControls;
+  rails?: { structure?: boolean; inspector?: boolean } | null;
 }
 
 function makeStore(over?: Partial<Store>): Store {
@@ -210,5 +211,31 @@ describe("CanvasApp — 3-패널 프레임 통합", () => {
     const store = makeStore({ doc: { version: 1, activeTheme: "neutral", mode: "system", pages: [], seq: 0 }, preview: { activePageId: null } });
     const { container } = mount(store, okExec);
     expect(container.textContent).toContain("No pages yet");
+  });
+});
+
+describe("CanvasApp — 사이드바 레일 방출", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("rails 미보고(구코어·프리뷰)면 인라인 구조·인스펙터 패널을 그대로 그린다(폴백)", () => {
+    const { container } = mount(makeStore(), okExec);
+    expect(container.querySelector('[data-testid="structure-tree"]')).toBeTruthy();
+    expect(container.querySelector('[role="complementary"]')).toBeTruthy();
+  });
+
+  it("rails 가 방출을 보고하면 인라인 패널을 생략한다 — 캔버스는 남는다(이중 렌더 0)", () => {
+    const { container } = mount(makeStore({ rails: { structure: true, inspector: true } }), okExec);
+    expect(container.querySelector('[data-testid="structure-tree"]')).toBeNull();
+    expect(container.querySelector('[role="navigation"]')).toBeNull();
+    expect(container.querySelector('[role="complementary"]')).toBeNull();
+    expect(container.querySelector('[data-node-id="btn"]')).toBeTruthy(); // 캔버스 실물 렌더 유지.
+  });
+
+  it("한쪽만 방출 — structure 만 나가면 인스펙터는 인라인으로 남는다", () => {
+    const { container } = mount(makeStore({ rails: { structure: true, inspector: false } }), okExec);
+    expect(container.querySelector('[data-testid="structure-tree"]')).toBeNull();
+    expect(container.querySelector('[role="complementary"]')).toBeTruthy();
   });
 });

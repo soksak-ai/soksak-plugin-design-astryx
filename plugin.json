@@ -41,6 +41,44 @@
         ],
         "status": [],
         "defaultPlacement": "content",
+        "transparent": true,
+        "sidebar": {
+          "left": [
+            {
+              "ref": "self.structure",
+              "instance": "per-view"
+            }
+          ],
+          "right": [
+            {
+              "ref": "self.inspector",
+              "instance": "per-view"
+            }
+          ]
+        }
+      },
+      {
+        "id": "structure",
+        "title": {
+          "en": "Structure",
+          "ko": "구조"
+        },
+        "icon": "▤",
+        "placements": [
+          "rail"
+        ],
+        "transparent": true
+      },
+      {
+        "id": "inspector",
+        "title": {
+          "en": "Inspector",
+          "ko": "인스펙터"
+        },
+        "icon": "🎛️",
+        "placements": [
+          "rail"
+        ],
         "transparent": true
       }
     ],

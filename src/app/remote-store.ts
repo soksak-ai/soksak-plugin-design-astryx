@@ -5,11 +5,13 @@
 import { freshCanvasControls, type CanvasControls, type DesignDoc, type Selection } from "../types";
 
 // CanvasApp 이 읽는 ViewStore 표면(canvas-app.tsx 의 ViewStore 와 동형). 호스트가 이 형태로 직렬화해 push.
+// rails = 뷰별 레일 방출 보고(캔버스 viewId → 슬롯별 present 여부) — 각 앱이 자기 vid 항목만 읽는다.
 export interface Snapshot {
   doc: DesignDoc;
   preview: { activePageId: string | null };
   selection: Selection | null;
   canvasControls: CanvasControls;
+  rails: Record<string, { structure?: boolean; inspector?: boolean }>;
 }
 
 // 스냅샷 도착 전 초기값 — 빈 문서(activePage=null → EmptyState). 호스트는 subscribe 즉시 실 스냅샷을 push.
@@ -19,6 +21,7 @@ function emptySnapshot(): Snapshot {
     preview: { activePageId: null },
     selection: null,
     canvasControls: freshCanvasControls(),
+    rails: {},
   };
 }
 
@@ -43,6 +46,7 @@ export function createRemoteStore(): RemoteStore {
         preview: { activePageId: s.preview?.activePageId ?? null },
         selection: s.selection ?? null,
         canvasControls: s.canvasControls ?? freshCanvasControls(),
+        rails: s.rails && typeof s.rails === "object" ? s.rails : {},
       };
       version++;
       for (const l of listeners) l();

@@ -94,4 +94,21 @@ describe("CanvasFrame", () => {
       expect(container.querySelector(`[data-testid="${id}"]`)).toBeTruthy();
     }
   });
+
+  it("structure/inspector 가 null 이면 그 사이드 패널을 통째로 생략한다(레일 방출)", () => {
+    const slot = (id: string): ReactElement =>
+      createElement("div", { "data-testid": id }, id);
+    const container = mount(
+      createElement(CanvasFrame, {
+        header: slot("h"),
+        structure: null,
+        canvas: slot("c"),
+        inspector: null,
+      }),
+    );
+    expect(container.querySelector('[data-testid="c"]')).toBeTruthy();
+    // 빈 패널 껍데기도 남지 않는다 — start/end 슬롯 자체가 생략된다.
+    expect(container.querySelector('[role="navigation"]')).toBeNull();
+    expect(container.querySelector('[role="complementary"]')).toBeNull();
+  });
 });

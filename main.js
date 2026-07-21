@@ -1978,10 +1978,10 @@ function createStore(opts) {
     persist,
     hydrate,
     subscribe,
-    notify,
+    notify: notify2,
     dispose
   };
-  function notify() {
+  function notify2() {
     for (const cb of [...subscribers]) {
       try {
         cb();
@@ -2006,7 +2006,7 @@ function createStore(opts) {
       }
     }
     store.selection = reconcileSelection(store.doc, store.selection);
-    notify();
+    notify2();
   }
   async function hydrate() {
     if (!kv) return;
@@ -2017,7 +2017,7 @@ function createStore(opts) {
       if (staleHydrate) return;
       store.doc = coerceDoc(v);
       store.selection = reconcileSelection(store.doc, store.selection);
-      notify();
+      notify2();
     } catch {
     } finally {
       hydrating = false;
@@ -2028,7 +2028,7 @@ function createStore(opts) {
     try {
       store.doc = coerceDoc(await kv.get(key));
       store.selection = reconcileSelection(store.doc, store.selection);
-      notify();
+      notify2();
     } catch {
     }
   }
@@ -22644,13 +22644,57 @@ function forwardInput(container, send) {
   };
 }
 
+// src/app/railBridge.ts
+init_define_CONTROLLED_INPUT_TYPES();
+var RAIL_SLOTS = ["structure", "inspector"];
+var containers = /* @__PURE__ */ new Map();
+var subs = /* @__PURE__ */ new Map();
+function notify(viewId) {
+  for (const fn of subs.get(viewId) ?? []) fn();
+}
+function registerRailContainer(viewId, slot, el) {
+  const entry = containers.get(viewId) ?? {};
+  entry[slot] = el;
+  containers.set(viewId, entry);
+  notify(viewId);
+  return () => {
+    const cur = containers.get(viewId);
+    if (!cur || cur[slot] !== el) return;
+    delete cur[slot];
+    if (!cur.structure && !cur.inspector) containers.delete(viewId);
+    else containers.set(viewId, cur);
+    notify(viewId);
+  };
+}
+function railContainer(viewId, slot) {
+  if (!viewId) return null;
+  return containers.get(viewId)?.[slot] ?? null;
+}
+function subscribeRail(viewId, fn) {
+  if (!viewId) return () => {
+  };
+  let set = subs.get(viewId);
+  if (!set) {
+    set = /* @__PURE__ */ new Set();
+    subs.set(viewId, set);
+  }
+  set.add(fn);
+  return () => {
+    const s = subs.get(viewId);
+    if (!s) return;
+    s.delete(fn);
+    if (s.size === 0) subs.delete(viewId);
+  };
+}
+
 // src/app/host.ts
-function snapshot(store) {
+function snapshot(store, rails) {
   return {
     doc: store.doc,
     preview: { activePageId: store.preview.activePageId },
     selection: store.selection,
-    canvasControls: store.canvasControls
+    canvasControls: store.canvasControls,
+    rails
   };
 }
 function safeParse(s) {
@@ -22727,15 +22771,19 @@ function createSidecarView(deps) {
     persistSurfaces(surfaceByView);
   }
   const subscribers = /* @__PURE__ */ new Set();
+  const railsByView = {};
   function pushSnapshot(queryId) {
     void send({
       type: "query-reply",
       queryId,
       success: true,
-      response: JSON.stringify(snapshot(store)),
+      response: JSON.stringify(snapshot(store, railsByView)),
       keep: true
       // persistent — 콜백 유지(다음 변이도 push).
     });
+  }
+  function pushAll() {
+    for (const q of subscribers) pushSnapshot(q);
   }
   async function relayExecute(queryId, name, params) {
     const exec = app.commands?.execute;
@@ -22776,9 +22824,101 @@ function createSidecarView(deps) {
       stop();
     };
   }
-  const unsubStore = store.subscribe(() => {
-    for (const q of subscribers) pushSnapshot(q);
-  });
+  const unsubStore = store.subscribe(pushAll);
+  function openSurface(container, url, claimKey, parkViewId, onFail) {
+    let closed = false;
+    let disposeLive = null;
+    void ensureRelay();
+    container.style.position = "absolute";
+    container.style.inset = "0";
+    container.style.background = "transparent";
+    container.style.overflow = "hidden";
+    void (async () => {
+      const r = measureRect(container);
+      const out = await send({
+        type: "create",
+        owner: "soksak-plugin-design-astryx",
+        mode: "offscreen",
+        scale: window.devicePixelRatio || 1,
+        x: r.x,
+        y: r.y,
+        w: r.w,
+        h: r.h,
+        url
+      });
+      const id = out && typeof out.id === "number" ? out.id : null;
+      if (id == null) {
+        console.warn("[design] \uC11C\uD53C\uC2A4 \uC0DD\uC131 \uC2E4\uD328");
+        if (!closed) onFail?.();
+        return;
+      }
+      if (closed) {
+        void send({ type: "close", id });
+        return;
+      }
+      trackSurface(claimKey, id);
+      const stop = hostSurface(container, id, parkViewId);
+      const stopInput = inputForwarder(container, id);
+      disposeLive = () => {
+        stopInput();
+        stop();
+        untrackSurface(claimKey);
+        void send({ type: "close", id });
+      };
+    })();
+    return {
+      close() {
+        if (closed) return;
+        closed = true;
+        disposeLive?.();
+        disposeLive = null;
+      }
+    };
+  }
+  function presentRails(viewId) {
+    const open = {};
+    const sync = () => {
+      let changed = false;
+      for (const slot of RAIL_SLOTS) {
+        const target = railContainer(viewId, slot);
+        const cur = open[slot];
+        if (cur && cur.container !== target) {
+          cur.handle.close();
+          delete open[slot];
+          changed = true;
+        }
+        if (target && !open[slot]) {
+          const url = `${shellUrl}#vid=${encodeURIComponent(viewId)}&panel=${slot}`;
+          const entry = {
+            container: target,
+            handle: openSurface(target, url, `${viewId}/${slot}`, null, () => {
+              if (open[slot] === entry) delete open[slot];
+            })
+          };
+          open[slot] = entry;
+          changed = true;
+        }
+      }
+      const next2 = { structure: !!open.structure, inspector: !!open.inspector };
+      const prev = railsByView[viewId];
+      if (!prev || prev.structure !== next2.structure || prev.inspector !== next2.inspector) {
+        railsByView[viewId] = next2;
+        changed = true;
+      }
+      if (changed) pushAll();
+    };
+    const off = subscribeRail(viewId, sync);
+    sync();
+    return () => {
+      off();
+      for (const slot of RAIL_SLOTS) {
+        open[slot]?.handle.close();
+        delete open[slot];
+      }
+      delete railsByView[viewId];
+      pushAll();
+    };
+  }
   const mounts = /* @__PURE__ */ new WeakMap();
   function hostSurface(container, id, viewId) {
     let lastKey = "";
@@ -22845,60 +22985,34 @@ function createSidecarView(deps) {
       if (raf) cancelAnimationFrame(raf);
     };
   }
-  const PENDING = { id: -1, dispose: () => {
-  } };
   const provider = {
     mount(container, ctx) {
       const viewId = ctx.viewId;
       if (!viewId) return;
       if (mounts.has(container)) return;
-      mounts.set(container, PENDING);
-      void ensureRelay();
-      container.style.position = "absolute";
-      container.style.inset = "0";
-      container.style.background = "transparent";
-      container.style.overflow = "hidden";
-      void (async () => {
-        const r = measureRect(container);
-        const out = await send({
-          type: "create",
-          owner: "soksak-plugin-design-astryx",
-          mode: "offscreen",
-          scale: window.devicePixelRatio || 1,
-          x: r.x,
-          y: r.y,
-          w: r.w,
-          h: r.h,
-          url: shellUrl
-        });
-        const id = out && typeof out.id === "number" ? out.id : null;
-        if (id == null) {
-          console.warn("[design] \uC11C\uD53C\uC2A4 \uC0DD\uC131 \uC2E4\uD328");
-          if (mounts.get(container) === PENDING) mounts.delete(container);
-          return;
+      const surface = openSurface(
+        container,
+        `${shellUrl}#vid=${encodeURIComponent(viewId)}`,
+        viewId,
+        viewId,
+        () => {
+          const m = mounts.get(container);
+          mounts.delete(container);
+          m?.dispose();
         }
-        if (mounts.get(container) !== PENDING) {
-          void send({ type: "close", id });
-          return;
+      );
+      const offRails = presentRails(viewId);
+      mounts.set(container, {
+        dispose() {
+          offRails();
+          surface.close();
         }
-        trackSurface(viewId, id);
-        const stop = hostSurface(container, id, viewId);
-        const stopInput = inputForwarder(container, id);
-        mounts.set(container, {
-          id,
-          dispose: () => {
-            stopInput();
-            stop();
-            untrackSurface(viewId);
-            void send({ type: "close", id });
-          }
-        });
-      })();
+      });
     },
     unmount(container) {
       const m = mounts.get(container);
       mounts.delete(container);
-      if (m && m !== PENDING) m.dispose();
+      m?.dispose();
     }
   };
   return {
@@ -38016,6 +38130,37 @@ function registerCommands(ctx, store) {
 }
 
 // src/plugin-entry.ts
+var railCleanups = /* @__PURE__ */ new WeakMap();
+function railView(slot) {
+  return {
+    mount(container, ctx) {
+      railCleanups.get(container)?.();
+      container.replaceChildren();
+      const bound = ctx.boundViewId ?? null;
+      if (!bound) {
+        const note = document.createElement("div");
+        note.style.cssText = "padding:14px;font-size:11px;color:#8a94a3;text-align:center";
+        note.textContent = "Astryx \uB514\uC790\uC778 \uACB0\uBD80 \uC5C6\uC74C";
+        container.appendChild(note);
+        railCleanups.set(container, () => container.replaceChildren());
+        return;
+      }
+      container.style.position = "relative";
+      const host = document.createElement("div");
+      host.style.cssText = "position:absolute;inset:0;overflow:hidden;background:transparent";
+      container.appendChild(host);
+      const off = registerRailContainer(bound, slot, host);
+      railCleanups.set(container, () => {
+        off();
+        container.replaceChildren();
+      });
+    },
+    unmount(container) {
+      railCleanups.get(container)?.();
+      railCleanups.delete(container);
+    }
+  };
+}
 var plugin_entry_default = {
   activate(ctx) {
     const app = ctx.app;
@@ -38040,6 +38185,8 @@ var plugin_entry_default = {
       });
       ctx.subscriptions.push({ dispose: () => sidecarView.dispose() });
       ctx.subscriptions.push(app.ui.registerView("canvas", sidecarView.provider));
+      ctx.subscriptions.push(app.ui.registerView("structure", railView("structure")));
+      ctx.subscriptions.push(app.ui.registerView("inspector", railView("inspector")));
     }
     void store.hydrate();
   },

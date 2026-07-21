@@ -53,13 +53,15 @@ const INSPECTOR_WIDTH = 320;
 
 export interface CanvasFrameProps {
   header: ReactNode; // 툴바 행(페이지·테마·모드·뷰포트·배경·TSX 내보내기).
-  structure: ReactNode; // 구조 패널(TreeList).
+  structure: ReactNode | null; // 구조 패널(TreeList). null = 레일로 방출됨 — start 슬롯 생략.
   canvas: ReactNode; // 캔버스(Shadow-DOM 실물 렌더).
-  inspector: ReactNode; // 인스펙터(선택 노드 prop 폼).
+  inspector: ReactNode | null; // 인스펙터(선택 노드 prop 폼). null = 레일로 방출됨 — end 슬롯 생략.
 }
 
 // 3-패널 프레임 — Layout 슬롯(header/start/content/end)에 크롬을 배치한다(§7 Chrome law 다이어그램).
 // 패널은 스크롤 가능, 캔버스 content 는 여백 0(안쪽 캔버스가 자기 패딩·스크롤을 든다).
+// 사이드바 방출(rail): structure/inspector 가 null 이면 그 사이드 패널을 통째로 생략한다 — 내용은
+// 결부 레일 서피스가 그린다(빈 껍데기 이중 렌더 금지).
 export function CanvasFrame({
   header,
   structure,
@@ -71,16 +73,18 @@ export function CanvasFrame({
       height="fill"
       header={<LayoutHeader hasDivider>{header}</LayoutHeader>}
       start={
-        <LayoutPanel
-          hasDivider
-          isScrollable
-          padding={2}
-          width={STRUCTURE_WIDTH}
-          role="navigation"
-          label="구조"
-        >
-          {structure}
-        </LayoutPanel>
+        structure == null ? undefined : (
+          <LayoutPanel
+            hasDivider
+            isScrollable
+            padding={2}
+            width={STRUCTURE_WIDTH}
+            role="navigation"
+            label="구조"
+          >
+            {structure}
+          </LayoutPanel>
+        )
       }
       content={
         <LayoutContent padding={0} role="main" label="캔버스">
@@ -88,16 +92,18 @@ export function CanvasFrame({
         </LayoutContent>
       }
       end={
-        <LayoutPanel
-          hasDivider
-          isScrollable
-          padding={2}
-          width={INSPECTOR_WIDTH}
-          role="complementary"
-          label="인스펙터"
-        >
-          {inspector}
-        </LayoutPanel>
+        inspector == null ? undefined : (
+          <LayoutPanel
+            hasDivider
+            isScrollable
+            padding={2}
+            width={INSPECTOR_WIDTH}
+            role="complementary"
+            label="인스펙터"
+          >
+            {inspector}
+          </LayoutPanel>
+        )
       }
     />
   );
