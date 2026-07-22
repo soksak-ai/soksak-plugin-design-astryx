@@ -272,17 +272,9 @@ export function CanvasApp({
       >
         <CanvasFrame
           header={header}
-          structure={
-            store.rails?.structure ? null : (
-              <TreePanel page={page} selectedNodeId={selNodeId} execute={execute} />
-            )
-          }
+          structure={null}
           canvas={canvasContent}
-          inspector={
-            store.rails?.inspector ? null : (
-              <Inspector page={page} node={selectedNode} entry={entry} execute={execute} />
-            )
-          }
+          inspector={null}
         />
       </ThemeScope>
 
