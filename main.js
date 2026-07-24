@@ -22972,10 +22972,20 @@ function createSidecarView(deps) {
         arm();
       }
     });
+    const offVeil = app.events?.on("view.veiled", (p) => {
+      const q = p;
+      if (!viewId || q.viewId !== viewId) return;
+      void send({ type: "hidden", id, hidden: !!q.veiled });
+      if (!q.veiled) {
+        lastKey = "";
+        arm();
+      }
+    });
     arm();
     return () => {
       ro.disconnect();
       io.disconnect();
+      offVeil?.dispose();
       window.removeEventListener("resize", onResize);
       document.removeEventListener("pointermove", onPointer, true);
       document.removeEventListener("pointerdown", onPointer, true);
