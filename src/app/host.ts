@@ -416,12 +416,24 @@ export function createSidecarView(deps: SidecarViewDeps): { provider: SidecarVie
         arm();
       }
     });
+    // 코어 슬롯 동결(§4.6)의 표면 가림 릴레이 — 스탠드인이 선 동안만 서피스를 숨긴다
+    // (view.parked 와 동형). 해동 시 강제 재동기로 착지 rect 를 정정한다.
+    const offVeil = app.events?.on("view.veiled", (p) => {
+      const q = p as { viewId?: string; veiled?: boolean };
+      if (!viewId || q.viewId !== viewId) return;
+      void send({ type: "hidden", id, hidden: !!q.veiled });
+      if (!q.veiled) {
+        lastKey = "";
+        arm();
+      }
+    });
 
     arm(); // 초기 settle.
 
     return () => {
       ro.disconnect();
       io.disconnect();
+      offVeil?.dispose();
       window.removeEventListener("resize", onResize);
       document.removeEventListener("pointermove", onPointer, true);
       document.removeEventListener("pointerdown", onPointer, true);
